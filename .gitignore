@@ -97,3 +97,9 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+
+# Rider / IntelliJ 专用文件夹
+.idea/
+# 如果你使用了本地特定的 Rider 配置文件
+.idea.Solution.Configurations.xml
