@@ -38,7 +38,8 @@ public partial class CameraRenderer
     /// </summary>
     /// <param name="context"></param>
     /// <param name="camera"></param>
-    public void Render(ScriptableRenderContext context, Camera camera)
+    public void Render(ScriptableRenderContext context, Camera camera,bool useDynamicBatching, bool useGPUInstancing // <--- 新增参数用于动态批处理
+    )
     {
         //设定当前上下文和摄像机
         this.context = context;
@@ -52,7 +53,8 @@ public partial class CameraRenderer
         
         Setup();
         //注意是对shadertag 也就是filter来进行区别绘制
-        DrawVisibleGeometry();
+        // 传给 DrawVisibleGeometry
+        DrawVisibleGeometry(useDynamicBatching, useGPUInstancing); 
         DrawUnsupportedShaders();
         DrawGizmos();
         //准备好缓冲后提交
@@ -73,7 +75,7 @@ public partial class CameraRenderer
         Depth	3	只清深度，保留之前颜色 
         Nothing	4	啥也不清*/
         CameraClearFlags flags = camera.clearFlags;//选择摄像机的清除标志 枚举类
-        Debug.Log("flags:" + (int)flags);
+        //Debug.Log("flags:" + (int)flags);
         
         //!注意了渲染的内容是不会自动清除的 需要我们手动清除
         // U Unity 内部又自动开了一个层级（名字也是 buffer.name），包裹住 Clear 
@@ -102,15 +104,22 @@ public partial class CameraRenderer
     /// 该方法首先根据当前摄像机的设置来渲染不透明物体，然后修改排序设置以渲染透明物体。
     /// 最后调用Unity内置函数绘制天空盒。
     /// </summary>
-    void DrawVisibleGeometry()
-    {
+    void DrawVisibleGeometry (bool useDynamicBatching, bool useGPUInstancing) {    
         //!第一阶段：渲染不透明物体 (Opaque)
         // 1. 根据相机初始化排序设置（获取相机位置、投影等）
         //! 这个默认的sortingSettings.criteria  criteria（排序准则）是None 也就是随机绘制 
         var sortingSettings = new SortingSettings(camera);
         //me 当然你可以在这里sortingSettings.criteria=  SortingCriteria.CommonOpaque 强制从前往后
         //决定摄像机支持的Shader Pass和绘制顺序等的配置
-        var drawingSettings = new DrawingSettings(unlitShaderTagId, sortingSettings);//unlitId和顺序画画
+        //第二章新增是否开始动态批处理或者是gpu实例化的选项在管线中
+        var drawingSettings = new DrawingSettings(
+            unlitShaderTagId, sortingSettings//unlitId和顺序画画
+        ) {
+            // --- 核心应用点 ---
+            enableDynamicBatching = useDynamicBatching,
+            enableInstancing = useGPUInstancing
+            // -----------------
+        };
         //设置绘制不透明物体
         var filteringSettings = new FilteringSettings(RenderQueueRange.opaque);//设置过滤对象
         //渲染CullingResults内的VisibleObjects
