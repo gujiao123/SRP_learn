@@ -20,13 +20,20 @@ public partial class CameraRenderer
     /// </summary>
     //me 和 URP feature 一样 你自己的pass也要去后处理设定才行
     //原理就是 生成hash 用于匹配而已 然后执行对应pass
-    static ShaderTagId unlitShaderTagId = new ShaderTagId("SRPDefaultUnlit"); //必须获取 SRPDefaultUnlit 通道的着色器标记ID
+    // 定义 Tag ID
+    static ShaderTagId 
+        unlitShaderTagId = new ShaderTagId("SRPDefaultUnlit"), //必须获取 SRPDefaultUnlit 通道的着色器标记ID
+        litShaderTagId = new ShaderTagId("CustomLit"); // 新增 
     
     //me 缓冲区是unity内置的只需要提供名字就行
     CommandBuffer buffer = new CommandBuffer
     {
         name = bufferName
     };//G 初始化成员的语法，这里初始化了一个CommandBuffer对象，并且给它命名为“Render Camera”
+    
+    
+    // 1. 实例化 Lighting 类
+    Lighting lighting = new Lighting();
     
     void ExecuteBuffer()
     {
@@ -52,6 +59,11 @@ public partial class CameraRenderer
         }
         
         Setup();
+        
+        // 2. 在画物体之前        ，先设置灯光！
+        // 必须把 cullingResults 传进去
+        lighting.Setup(context, cullingResults); 
+        
         //注意是对shadertag 也就是filter来进行区别绘制
         // 传给 DrawVisibleGeometry
         DrawVisibleGeometry(useDynamicBatching, useGPUInstancing); 
@@ -99,12 +111,19 @@ public partial class CameraRenderer
         
     }
 
+    
+    
+    
+    
     /// <summary>
     /// 绘制所有可见几何体，包括不透明和透明物体，并绘制天空盒。
     /// 该方法首先根据当前摄像机的设置来渲染不透明物体，然后修改排序设置以渲染透明物体。
     /// 最后调用Unity内置函数绘制天空盒。
     /// </summary>
     void DrawVisibleGeometry (bool useDynamicBatching, bool useGPUInstancing) {    
+        
+        
+        
         //!第一阶段：渲染不透明物体 (Opaque)
         // 1. 根据相机初始化排序设置（获取相机位置、投影等）
         //! 这个默认的sortingSettings.criteria  criteria（排序准则）是None 也就是随机绘制 
@@ -119,7 +138,14 @@ public partial class CameraRenderer
             enableDynamicBatching = useDynamicBatching,
             enableInstancing = useGPUInstancing
             // -----------------
+            
         };
+        
+        // 关键：添加第二个 Pass Name
+        //第一个参数是槽位,第二是对应passtag  unlitShaderTagId就是从0槽位开始
+        drawingSettings.SetShaderPassName(1, litShaderTagId);
+        
+        
         //设置绘制不透明物体
         var filteringSettings = new FilteringSettings(RenderQueueRange.opaque);//设置过滤对象
         //渲染CullingResults内的VisibleObjects

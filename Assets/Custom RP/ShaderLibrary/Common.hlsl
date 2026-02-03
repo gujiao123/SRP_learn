@@ -3,6 +3,10 @@
 // 1. 引入 Core 库的基础定义 (包含 real4 等类型别名)
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 
+// --- 新增引用 --- 用于简便材质计算
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
+
+
 // 2. 引入我们的变量定义
 #include "UnityInput.hlsl"
 

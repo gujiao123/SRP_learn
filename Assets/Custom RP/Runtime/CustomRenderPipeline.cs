@@ -17,6 +17,9 @@ public class CustomRenderPipeline : RenderPipeline
         // 这就是开启 SRP Batcher 的全局开关
         // 一旦开启，Unity 会尝试把所有兼容的 Shader 自动合批
         GraphicsSettings.useScriptableRenderPipelineBatching = useSRPBatcher;
+        
+        // 必须开启，否则灯光强度不对
+        GraphicsSettings.lightsUseLinearIntensity = true; 
     }
    
     
