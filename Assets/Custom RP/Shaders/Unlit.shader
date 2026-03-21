@@ -3,7 +3,8 @@ Shader "Custom RP/Unlit"{
     Properties {
         //在编辑器面板添加颜色选择器。
         // 变量名("显示名", 类型) = 默认值
-        _BaseColor("Color", Color) = (1.0, 1.0, 1.0, 1.0)
+        // [HDR]：允许颜色亮度超过 1，让 Unlit 材质能作为非常明亮的自发光使用
+        [HDR] _BaseColor("Color", Color) = (1.0, 1.0, 1.0, 1.0)
          // --- 新增渲染状态控制 ---
         
         //SrcBlend (源混合因子)：新画上去的颜色占多少比例？
@@ -18,6 +19,13 @@ Shader "Custom RP/Unlit"{
     }
     
     SubShader {
+        
+        // 🔊 HLSLINCLUDE：广播大喇叭（与 Lit.shader 同款）
+        // Common 和 UnlitInput 自动注入到所有 Pass
+        HLSLINCLUDE
+        #include "../ShaderLibrary/Common.hlsl"
+        #include "UnlitInput.hlsl"
+        ENDHLSL
         
         Pass {
             
@@ -46,6 +54,35 @@ Shader "Custom RP/Unlit"{
 
             
             // 4. 结束 HLSL 代码块
+            ENDHLSL
+        }
+
+        Pass {
+            Tags {
+                "LightMode" = "ShadowCaster"
+            }
+        
+            ColorMask 0
+            HLSLPROGRAM 
+            #pragma target 3.5
+            #pragma shader_feature _ _SHADOWS_CLIP _SHADOWS_DITHER
+            #pragma multi_compile_instancing
+            #pragma vertex ShadowCasterPassVertex
+            #pragma fragment ShadowCasterPassFragment
+            #include "ShadowCasterPass.hlsl"
+            ENDHLSL
+        }
+
+        // Meta Pass — Unlit 版本
+        // Unlit 的 GetEmission 就是 GetBase，让不受光材质也能把颜色贡献给烘焙
+        Pass {
+            Tags { "LightMode" = "Meta" }
+            Cull Off
+            HLSLPROGRAM
+            #pragma target 3.5
+            #pragma vertex MetaPassVertex
+            #pragma fragment MetaPassFragment
+            #include "MetaPass.hlsl"
             ENDHLSL
         }
     }

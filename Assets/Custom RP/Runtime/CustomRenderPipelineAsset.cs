@@ -7,7 +7,8 @@ using UnityEngine.Rendering;
 //所以渲染管线资源本身只是一个存储渲染设置的东西，以及给 Unity 提供一种方法来获取负责渲染的管线对象实例。
 public class CustomRenderPipelineAsset : RenderPipelineAsset
 {
-    
+    [SerializeField]
+    ShadowSettings shadows = default;
 
     //用于动态批处理 过时技术,消耗大量cpu资源
     // 1. 定义序列化字段 (面板开关)
@@ -18,8 +19,14 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     // 2. 传给管线实例
     protected override RenderPipeline CreatePipeline () {
         return new CustomRenderPipeline(
-            useDynamicBatching, useGPUInstancing, useSRPBatcher
+            useDynamicBatching, useGPUInstancing, useSRPBatcher,
+            shadows // 新增参数
         );
     }
     
 }   
+
+
+
+
+

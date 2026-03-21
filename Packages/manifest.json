@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.antigravity.ide": "https://github.com/billythekidz/UnityAntigravityIDE.git",
     "com.unity.ide.rider": "3.0.38",
     "com.unity.ide.vscode": "1.2.5",
     "com.unity.performance.profile-analyzer": "1.2.4",

@@ -4,6 +4,8 @@ using Unity.Collections; // 需要用到 NativeArray
 
 public class Lighting {
 
+    
+    
     const string bufferName = "Lighting";
     
     // 命令缓冲区，用于发送数据
@@ -20,15 +22,22 @@ public class Lighting {
     static int
         dirLightCountId = Shader.PropertyToID("_DirectionalLightCount"),
         dirLightColorsId = Shader.PropertyToID("_DirectionalLightColors"),
-        dirLightDirectionsId = Shader.PropertyToID("_DirectionalLightDirections");
+        dirLightDirectionsId = Shader.PropertyToID("_DirectionalLightDirections"),
+        dirLightShadowDataId = Shader.PropertyToID("_DirectionalLightShadowData");
+
 
     // CPU 端缓存数组
     static Vector4[]
         dirLightColors = new Vector4[maxDirLightCount],
-        dirLightDirections = new Vector4[maxDirLightCount];
+        dirLightDirections = new Vector4[maxDirLightCount],
+        dirLightShadowData = new Vector4[maxDirLightCount];
 
     // 剔除结果
     CullingResults cullingResults;
+    
+    Shadows shadows = new Shadows();
+
+    
 
     // --- 公共接口 ---
     /// <summary>
@@ -36,21 +45,50 @@ public class Lighting {
     /// </summary>
     /// <param name="context"></param>
     /// <param name="cullingResults"></param>
-    public void Setup (ScriptableRenderContext context, CullingResults cullingResults) {
+    public void Setup (ScriptableRenderContext context, CullingResults cullingResults,
+        ShadowSettings shadowSettings // 新增参数
+        ) {
         this.cullingResults = cullingResults;
         
         buffer.BeginSample(bufferName);
         
+        // 1. 先设置阴影
+        shadows.Setup(context, cullingResults, shadowSettings); // 转发给 Shadows
+
         // 核心逻辑：设置灯光
         SetupLights();
+        
+        // 2. 渲染阴影 (在设置完所有光源后)
+        shadows.Render();
+        
         buffer.EndSample(bufferName);
         
         context.ExecuteCommandBuffer(buffer);
         buffer.Clear();
     }
-
+    
+    
+    /// <summary>
+    /// 配置定向光，包括其颜色和方向，并预留阴影。
+    /// </summary>
+    /// <param name="index">定向光在数组中的索引。</param>
+    /// <param name="visibleLight">可见的定向光源。</param>
+    void SetupDirectionalLight(int index, ref VisibleLight visibleLight)
+    {
+        // 颜色：finalColor 已经包含了强度(Intensity)
+        dirLightColors[index] = visibleLight.finalColor;
+        
+        // 方向：是 localToWorldMatrix 的第三列 (Z轴)，取反
+        // 因为光照方向通常是指“光从哪里来”，而 forward 是“光去哪里”
+        dirLightDirections[index] = -visibleLight.localToWorldMatrix.GetColumn(2);
+        //得到可见光的强度和ID
+        dirLightShadowData[index] = shadows.ReserveDirectionalShadows(visibleLight.light, index);
+    }
+    
+    
     void SetupLights () {
         // 从剔除结果中获取所有可见灯光
+        //me05 这个visibleLights 只会传递 realtime和mixed 也就是说用于baked模式的灯光你烘焙完后就不给了你了,你要取用生成好的光照贴图
         NativeArray<VisibleLight> visibleLights = cullingResults.visibleLights;
         
         int dirLightCount = 0;
@@ -76,15 +114,13 @@ public class Lighting {
         buffer.SetGlobalInt(dirLightCountId, dirLightCount);
         buffer.SetGlobalVectorArray(dirLightColorsId, dirLightColors);
         buffer.SetGlobalVectorArray(dirLightDirectionsId, dirLightDirections);
+        buffer.SetGlobalVectorArray(dirLightShadowDataId, dirLightShadowData);
     }
 
-    void SetupDirectionalLight (int index, ref VisibleLight visibleLight) {
-        // 颜色：finalColor 已经包含了强度(Intensity)
-        dirLightColors[index] = visibleLight.finalColor;
-        
-        // 方向：是 localToWorldMatrix 的第三列 (Z轴)，取反
-        // 因为光照方向通常是指“光从哪里来”，而 forward 是“光去哪里”
-        dirLightDirections[index] = -visibleLight.localToWorldMatrix.GetColumn(2);
+    
+    /// 新增清理接口
+    public void Cleanup () {
+        shadows.Cleanup();
     }
 }
 

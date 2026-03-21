@@ -1,48 +1,24 @@
-﻿// 1. Include Guard 开始
+// 1. Include Guard 开始
 // 这里的宏命名规范通常是：项目名_文件名_INCLUDED,
 //me 防止重复定义宏文件
 #ifndef CUSTOM_LIT_PASS_INCLUDED
 #define CUSTOM_LIT_PASS_INCLUDED
 
 
-// 2. 引用 Common (里面包含了 SpaceTransforms)
-#include "../ShaderLibrary/Common.hlsl"
+// Common 和 LitInput 已由 Lit.shader 的 HLSLINCLUDE 自动注入，无需在此重复引用
+// #include "../ShaderLibrary/Common.hlsl"  ← 已由 HLSLINCLUDE 广播
+// #include "LitInput.hlsl"                 ← 已由 HLSLINCLUDE 广播
 #include "../ShaderLibrary/Surface.hlsl"
+#include "../ShaderLibrary/Shadows.hlsl"
 #include "../ShaderLibrary/Light.hlsl"
 #include "../ShaderLibrary/BRDF.hlsl"
+#include "../ShaderLibrary/GI.hlsl"
 #include "../ShaderLibrary/Lighting.hlsl"
 
-// --- 修改变量定义方式 ---
-// CBUFFER_START(缓冲区名字)
-// UnityPerMaterial 这个名字是约定俗成的，SRP Batcher 会认这个名字
-//注意：这个宏来自 Core Library，它会自动处理不同平台的常量缓冲区语法。
-/*CBUFFER_START(UnityPerMaterial)
-    float4 _BaseColor;
-CBUFFER_END*/
-// -----------------------
-
-// 纹理和采样器必须定义在全局，不能进 CBUFFER
-TEXTURE2D(_BaseMap);
-SAMPLER(sampler_BaseMap);
-
-// -------------------
-// --- 修改属性定义 ---
-// 不再是 CBUFFER_START(UnityPerMaterial)
-//me 使用GPU实例化
-//普通的 CBUFFER_START 定义的是单个变量。
-//Instancing 需要用 UNITY_INSTANCING_BUFFER_START 定义数组。
-UNITY_INSTANCING_BUFFER_START(UnityPerMaterial)
-    // float4 _BaseColor;  <-- 旧写法
-    // 新写法：定义一个名为 _BaseColor 的实例化属性
-    UNITY_DEFINE_INSTANCED_PROP(float4, _BaseMap_ST) // 纹理变换
-    UNITY_DEFINE_INSTANCED_PROP(float4, _BaseColor)
-// --- 记得补上这个 ---
-   UNITY_DEFINE_INSTANCED_PROP(float, _Cutoff)
-   // -----------------
-// 新增
-   UNITY_DEFINE_INSTANCED_PROP(float, _Metallic)
-   UNITY_DEFINE_INSTANCED_PROP(float, _Smoothness)
-UNITY_INSTANCING_BUFFER_END(UnityPerMaterial)
+// ✅ 材质变量已全部迁移到 LitInput.hlsl！
+// 通过 Lit.shader 的 HLSLINCLUDE 自动注入，这里不再重复定义
+// 直接使用 LitInput.hlsl 提供的接口函数即可：
+//   GetBase(uv), GetCutoff(uv), GetMetallic(uv), GetSmoothness(uv), TransformBaseUV(uv)
 
 
 struct Attributes {
@@ -50,6 +26,7 @@ struct Attributes {
     // --- 新增 ---
     float3 normalOS : NORMAL; // 获取模型空间的法线
     // -----------
+    GI_ATTRIBUTE_DATA
     // --- 新增宏 ---
     // 自动声明 instanceID 变量（如果开启了 Instancing）
     UNITY_VERTEX_INPUT_INSTANCE_ID
@@ -63,6 +40,7 @@ struct Varyings {
     // --- 新增 ---
     float3 normalWS : VAR_NORMAL; // 传递世界空间的法线
     // -----------
+    GI_VARYINGS_DATA
     // --- 新增宏 ---
     // 自动声明 instanceID 变量用于传递
     UNITY_VERTEX_INPUT_INSTANCE_ID
@@ -88,6 +66,7 @@ Varyings LitPassVertex (Attributes input) {
     UNITY_SETUP_INSTANCE_ID(input);
     // 2. 传递 ID：把 ID 塞给 output，传给片元着色器
     UNITY_TRANSFER_INSTANCE_ID(input, output);
+    TRANSFER_GI_DATA(input, output);
     
     // 步骤 A: 对象空间 -> 世界空间
     output.positionWS = TransformObjectToWorld(input.positionOS); // 赋值给 output
@@ -105,9 +84,8 @@ Varyings LitPassVertex (Attributes input) {
     
     output.normalWS = TransformObjectToWorldNormal(input.normalOS);
     // ---------------
-    // 计算 UV (应用 Tiling/Offset)
-    float4 baseST = UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _BaseMap_ST);
-    output.baseUV = input.baseUV * baseST.xy + baseST.zw;
+    // 计算 UV：调用银行接口，内部已封装 _BaseMap_ST 的计算
+    output.baseUV = TransformBaseUV(input.baseUV);
     return output;
 
 }
@@ -119,12 +97,8 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     // 1. 提取 ID：从 input 中拿到刚才传过来的 ID
     UNITY_SETUP_INSTANCE_ID(input);
     
-    // 1. 采样纹理 目前只需要这个透明通道 
-    float4 baseMap = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, input.baseUV);
-    // 2. 获取颜色属性
-    float4 baseColor = UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _BaseColor);
-    // 3. 混合结果
-    float4 base = baseMap * baseColor;
+    // 调用银行接口：采样贴图 + 颜色叠乘，一步完成
+    float4 base = GetBase(input.baseUV);
     // --- 归一化 ---
     // 插值后的法线长度可能不是 1，必须重置
     /*插值与归一化 (Interpolation & Normalization)
@@ -144,15 +118,23 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     // 必须计算视线方向
     // _WorldSpaceCameraPos 来自 UnityInput.hlsl
     surface.viewDirection = normalize(_WorldSpaceCameraPos - input.positionWS);
-    surface.metallic = UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _Metallic);
-    surface.smoothness = UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _Smoothness);
+    surface.metallic = GetMetallic(input.baseUV);
+    surface.smoothness = GetSmoothness(input.baseUV);
     // A. 法线：归一化插值后的法线
     surface.normal = normal;
     
+    surface.position = input.positionWS;
     
-    // Clipping 逻辑 (现在可以用纹理的 Alpha 来剔除了！)
+    //得到相机坐标下的离相机距离就是深度 用于 当离相机远了就不生成阴影
+    surface.depth = -TransformWorldToView(input.positionWS).z;
+    
+    //表面扰动值 我去 这个不是类似毛毛贴图吗
+    //目前配合TAA消除级联间阴影 抖动混合阴影专用
+    surface.dither = InterleavedGradientNoise(input.positionCS.xy, 0);
+
+    // Clipping 逻辑
     #if defined(_CLIPPING)
-    clip(surface.alpha - UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _Cutoff));
+    clip(surface.alpha - GetCutoff(input.baseUV));
     #endif
 
     // --- 根据宏决定是否预乘 ---
@@ -163,11 +145,18 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     #endif
     
     // 3. 计算光照
-    float3 color = GetLighting(surface, brdf);
+    GI gi = GetGI(GI_FRAGMENT_DATA(input), surface);
+    float3 color = GetLighting(surface, brdf, gi);
     
+    //float4 finalColor = test(surface);
+    
+    //return finalColor;
     // 2. 查表取色：不再直接用 _BaseColor
     // 而是去 UnityPerMaterial 数组里，根据当前 ID 取出对应的 _BaseColor
     //return UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _BaseColor);
+    // 叠加自发光：自发光不受实时光照影响，直接加在最终颜色上
+    // 如果没有设置 EmissionColor 或贴图，默认是黑色（0,0,0），等于没有影响
+    color += GetEmission(input.baseUV);
     return float4(color, surface.alpha);
 
 

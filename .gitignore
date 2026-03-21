@@ -103,3 +103,9 @@ InitTestScene*.unity*
 .idea/
 # 如果你使用了本地特定的 Rider 配置文件
 .idea.Solution.Configurations.xml
+
+# =============================================
+# 🔒 个人笔记目录（不上传到公共仓库）
+# =============================================
+/[Aa]ssets/笔记/
+/[Aa]ssets/笔记.meta

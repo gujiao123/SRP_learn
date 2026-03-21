@@ -9,6 +9,10 @@ struct Surface {
     float3 viewDirection; // <--- 必须加这个！
     float metallic;
     float smoothness;
+    float3 position;
+    float depth;//表面深度 用于裁剪剔除球
+    float dither;//扰动值
+
 };
 
 #endif

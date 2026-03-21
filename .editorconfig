@@ -1,0 +1,35 @@
+# Antigravity IDE — Unity Analyzer Configuration
+# Auto-generated. Safe to customize.
+
+root = true
+
+[*.cs]
+
+# Formatting
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Unity-specific diagnostic suppressions
+# IDE0051: Remove unused private members — false positive for Unity messages
+dotnet_diagnostic.IDE0051.severity = none
+
+# IDE0044: Add readonly modifier — false positive for serialized fields
+dotnet_diagnostic.IDE0044.severity = none
+
+# CS0649: Field is never assigned — false positive for [SerializeField]
+dotnet_diagnostic.CS0649.severity = none
+
+[*.shader]
+indent_style = tab
+
+[*.uss]
+indent_style = space
+indent_size = 4
+
+[*.uxml]
+indent_style = space
+indent_size = 4

@@ -45,30 +45,49 @@ public partial class CameraRenderer
     /// </summary>
     /// <param name="context"></param>
     /// <param name="camera"></param>
-    public void Render(ScriptableRenderContext context, Camera camera,bool useDynamicBatching, bool useGPUInstancing // <--- 新增参数用于动态批处理
+    public void Render(ScriptableRenderContext context, Camera camera,bool useDynamicBatching, bool useGPUInstancing, // <--- 新增参数用于动态批处理
+        ShadowSettings shadowSettings // 新增参数
+
     )
     {
+        
         //设定当前上下文和摄像机
         this.context = context;
         this.camera = camera;
         PrepareBuffer();//每个摄像机渲染器都会调用的函数，用于准备CommandBuffer   设置对应Buffer名字
         PrepareForSceneWindow();//渲染所有编辑世界(scene)的物体 然后剔除
-        if (!Cull())
-        {
+        if (!Cull(shadowSettings.maxDistance)) { // 使用 Max Distance 剔除
             return;
         }
         
+        //!!我们需要在渲染实际摄像机画面之前渲染阴影贴图
+        //???不明白啊 ,到底 我们 屏幕上显示的是什么
+        // 2. 在画物体之前，先设置灯光！
+        //规定好条目
+        buffer.BeginSample(SampleName);
+        ExecuteBuffer();//提交一下 才能生效
+        //将光源信息传递给GPU，在其中也会完成阴影贴图的渲染
+        lighting.Setup(context, cullingResults, shadowSettings);
+        buffer.EndSample(SampleName);
+        
+        
+        //然后 把画布修改交给摄像机RT,
+        //!!不能反过来,不然会导致 所有作画都在阴影上,而阴影贴图没有颜色通道
         Setup();
         
-        // 2. 在画物体之前        ，先设置灯光！
-        // 必须把 cullingResults 传进去
-        lighting.Setup(context, cullingResults); 
+        // --- 新增：强制切回摄像机 RT ---
+        // 方法 A：再次调用 SetupCameraProperties
+        //?? 为了 解决 scene摄像机 画了阴影贴图 并不能回到大场景中 导致屏幕一片灰色 
+        //context.SetupCameraProperties(camera);
         
         //注意是对shadertag 也就是filter来进行区别绘制
         // 传给 DrawVisibleGeometry
         DrawVisibleGeometry(useDynamicBatching, useGPUInstancing); 
         DrawUnsupportedShaders();
         DrawGizmos();
+        
+        lighting.Cleanup(); // 新增：在 Submit 之前清理
+
         //准备好缓冲后提交
         Submit();
     }
@@ -78,6 +97,8 @@ public partial class CameraRenderer
     /// </summary>
     void Setup()
     {
+        
+        //!! 这个也会重新绑定RT 也就是说 这个会抢夺 目前GPU处理的 图像 
         context.SetupCameraProperties(camera);//把摄像机的属性传递给当前上下文 得到对应的MVP矩阵
         //me 这个是自己可在editor内选择
         //me做什么选择 只是选择一个枚举值罢了具体的逻辑还是你自己写 你就当成一个数字好了
@@ -136,9 +157,11 @@ public partial class CameraRenderer
         ) {
             // --- 核心应用点 ---
             enableDynamicBatching = useDynamicBatching,
-            enableInstancing = useGPUInstancing
+            enableInstancing = useGPUInstancing,
             // -----------------
-            
+            //me05 你不主动写unity就不得发送,这里是要static物体的烘焙好的光照贴图坐标数据
+            //me05 光照探针数据也要上报,不是这个光照探针又是什么鬼物体为什么要存储光照探针数据??存储的是什么
+            perObjectData = PerObjectData.Lightmaps | PerObjectData.LightProbe
         };
         
         // 关键：添加第二个 Pass Name
@@ -172,11 +195,15 @@ public partial class CameraRenderer
         context.Submit();
     }
 
-    bool Cull()//执行视锥体剔除（Frustum Culling）
+    bool Cull(float maxShadowDistance)//执行视锥体剔除（Frustum Culling）
     {
         //尝试获取摄像机的剔除参数 存入P中 然后在上下文剔除 ,这些被剔除的物体就不会被渲染了 
         if (camera.TryGetCullingParameters(out ScriptableCullingParameters p))
         {
+            // 设置阴影距离 (取 Max Distance 和 摄像机远裁剪面的较小值)
+            //? 
+            //@
+            p.shadowDistance = Mathf.Min(maxShadowDistance, camera.farClipPlane);
             //剔除后的结果（哪些物体可见、哪些灯光有效）被存入cullingResults 变量中，供后续渲染使用
             cullingResults = context.Cull(ref p);
             return true;

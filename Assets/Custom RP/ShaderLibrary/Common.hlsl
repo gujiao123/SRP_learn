@@ -38,8 +38,10 @@
 // 这个文件里包含了 TransformObjectToWorld, TransformWorldToHClip 等标准实现
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/SpaceTransforms.hlsl"
 
-
-
+//计算两点间的距离公式
+float DistanceSquared(float3 pA, float3 pB) {
+    return dot(pA - pB, pA - pB);
+}
 
 
 //已经在官方实现

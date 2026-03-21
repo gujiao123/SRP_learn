@@ -1,4 +1,4 @@
-﻿#ifndef CUSTOM_LIGHTING_INCLUDED
+#ifndef CUSTOM_LIGHTING_INCLUDED
 #define CUSTOM_LIGHTING_INCLUDED
 
 // 辅助函数：平方
@@ -8,7 +8,9 @@ float Square (float v) {
 
 // 1. 计算入射光能量 (Lambert项)
 float3 IncomingLight (Surface surface, Light light) {
-    return saturate(dot(surface.normal, light.direction)) * light.color;
+    return
+        saturate(dot(surface.normal, light.direction) * light.attenuation) *
+        light.color;
 }
 
 // 2. 计算高光强度 (Cook-Torrance 简化版)
@@ -40,11 +42,12 @@ float3 GetLighting (Surface surface, BRDF brdf, Light light) {
 }
 
 // 5. 主循环
-float3 GetLighting (Surface surface, BRDF brdf) {
-    float3 color = 0.0;
+float3 GetLighting (Surface surfaceWS, BRDF brdf, GI gi) {
+    ShadowData shadowData = GetShadowData(surfaceWS);
+    float3 color = gi.diffuse * brdf.diffuse;
     for (int i = 0; i < GetDirectionalLightCount(); i++) {
-        Light light = GetDirectionalLight(i);
-        color += GetLighting(surface, brdf, light);
+        Light light = GetDirectionalLight(i, surfaceWS, shadowData);
+        color += GetLighting(surfaceWS, brdf, light);
     }
     return color;
 }
