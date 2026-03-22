@@ -1,4 +1,4 @@
-﻿#ifndef CUSTOM_COMMON_INCLUDED
+#ifndef CUSTOM_COMMON_INCLUDED
 #define CUSTOM_COMMON_INCLUDED
 // 1. 引入 Core 库的基础定义 (包含 real4 等类型别名)
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
@@ -49,6 +49,7 @@
 // 4. 引入 Core 库的空间变换函数
 // 这个文件里包含了 TransformObjectToWorld, TransformWorldToHClip 等标准实现
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/SpaceTransforms.hlsl"
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Packing.hlsl" // me08: 法线解码函数库
 
 //计算两点间的距离公式
 float DistanceSquared(float3 pA, float3 pB) {
@@ -66,6 +67,25 @@ void ClipLOD(float2 positionCS, float fade) {
         float dither = InterleavedGradientNoise(positionCS.xy, 0);
         clip(fade + (fade < 0.0 ? dither : -dither));
     #endif
+}
+
+// me08: 从法线贴图采样值解码出切线空间法线（scale 控制法线强度）
+// 处理平台差异：DXT5nm格式 XY存 RG/AG通道，其他格式存 RGB
+float3 DecodeNormal(float4 sample, float scale) {
+    #if defined(UNITY_NO_DXT5nm)
+        return normalize(UnpackNormalRGB(sample, scale));
+    #else
+        return normalize(UnpackNormalmapRGorAG(sample, scale));
+    #endif
+}
+
+// me08: 切线空间法线 → 世界空间法线
+// normalWS=几何法线, tangentWS=切线(xyz方向,w正负)
+float3 NormalTangentToWorld(float3 normalTS, float3 normalWS, float4 tangentWS) {
+    // CreateTangentToWorld: 用法线+切线构造转换矩阵
+    float3x3 tangentToWorld = CreateTangentToWorld(normalWS, tangentWS.xyz, tangentWS.w);
+    // TransformTangentToWorld: 用矩阵把切线空间法线转到世界空间
+    return TransformTangentToWorld(normalTS, tangentToWorld);
 }
 
 

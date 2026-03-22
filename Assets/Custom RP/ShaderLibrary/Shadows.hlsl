@@ -193,8 +193,8 @@ float FilterDirectionalShadow (float3 positionSTS) {
 float GetCascadedShadow(
     DirectionalShadowData directional, ShadowData global, Surface surfaceWS
 ) {
-     // 计算当前级联下的法线偏移，解决自阴影（Shadow Acne）问题
-    float3 normalBias = surfaceWS.normal * 
+     // me08: 用 interpolatedNormal（几何法线）做 Shadow Bias，不受法线贴图扰动
+    float3 normalBias = surfaceWS.interpolatedNormal * 
         (directional.normalBias * _CascadeData[global.cascadeIndex].y);
          //根据对应Tile阴影变换矩阵和片元的世界坐标计算Tile上的像素坐标STS
     //data.tileIndex 告诉它：“去查第几个矩阵”，从而确保它能定位到大图集里正确的那个小格（Tile）。
@@ -209,7 +209,7 @@ float GetCascadedShadow(
     // 注意：若未定义 _CASCADE_BLEND_SOFT，此处的 if 分支会被编译器优化剔除
     // 级联混合
     if (global.cascadeBlend < 1.0) {
-        normalBias = surfaceWS.normal * 
+        normalBias = surfaceWS.interpolatedNormal * 
             (directional.normalBias * _CascadeData[global.cascadeIndex + 1].y);
         positionSTS = mul(
             _DirectionalShadowMatrices[directional.tileIndex + 1],

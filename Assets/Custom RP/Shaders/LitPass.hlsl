@@ -23,30 +23,25 @@
 
 struct Attributes {
     float3 positionOS : POSITION;
-    // --- 新增 ---
-    float3 normalOS : NORMAL; // 获取模型空间的法线
-    // -----------
+    float3 normalOS : NORMAL;
+    float4 tangentOS : TANGENT; // me08: 切线向量，w分量指定 B轴方向（用于左右对称网格翻转法线）
     GI_ATTRIBUTE_DATA
-    // --- 新增宏 ---
-    // 自动声明 instanceID 变量（如果开启了 Instancing）
     UNITY_VERTEX_INPUT_INSTANCE_ID
-    // -------------
-    float2 baseUV : TEXCOORD0; // 新增 UV 输入
-    
+    float2 baseUV : TEXCOORD0;
 };
 struct Varyings {
     float4 positionCS : SV_POSITION;
-    float3 positionWS : VAR_POSITION; // 后面算光照方向需要这个
-    // --- 新增 ---
-    float3 normalWS : VAR_NORMAL; // 传递世界空间的法线
-    // -----------
+    float3 positionWS : VAR_POSITION;
+    float3 normalWS : VAR_NORMAL;
+    #if defined(_NORMAL_MAP)
+    float4 tangentWS : VAR_TANGENT; // me08: 切线向量（w 存差山方向）
+    #endif
     GI_VARYINGS_DATA
-    // --- 新增宏 ---
-    // 自动声明 instanceID 变量用于传递
     UNITY_VERTEX_INPUT_INSTANCE_ID
-    // -------------
-    float2 baseUV : VAR_BASE_UV; // 新增 UV 传递
-    
+    float2 baseUV : VAR_BASE_UV;
+    #if defined(_DETAIL_MAP)
+    float2 detailUV : VAR_DETAIL_UV; // me08: Detail Map 的独立 UV
+    #endif
 };
 
 // 2. 顶点着色器 (Vertex Shader)
@@ -84,8 +79,17 @@ Varyings LitPassVertex (Attributes input) {
     
     output.normalWS = TransformObjectToWorldNormal(input.normalOS);
     // ---------------
+    #if defined(_NORMAL_MAP)
+    // me08: 切线 XYZ 转到世界空间，w 保留原始符号（1=正常，-1=翻转）
+    output.tangentWS = float4(
+        TransformObjectToWorldDir(input.tangentOS.xyz), input.tangentOS.w
+    );
+    #endif
     // 计算 UV：调用银行接口，内部已封装 _BaseMap_ST 的计算
     output.baseUV = TransformBaseUV(input.baseUV);
+    #if defined(_DETAIL_MAP)
+    output.detailUV = TransformDetailUV(input.baseUV); // me08: 细节 UV 独立计算
+    #endif
     return output;
 
 }
@@ -100,8 +104,12 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     // 1. 提取 ID：从 input 中拿到刚才传过来的 ID
     UNITY_SETUP_INSTANCE_ID(input);
     
-    // 调用银行接口：采样贴图 + 颜色叠乘，一步完成
+    // me08: 如果开了 Detail Map 就传入 detailUV，否则传默认值 0
+    #if defined(_DETAIL_MAP)
+    float4 base = GetBase(input.baseUV, input.detailUV);
+    #else
     float4 base = GetBase(input.baseUV);
+    #endif
     // --- 归一化 ---
     // 插值后的法线长度可能不是 1，必须重置
     /*插值与归一化 (Interpolation & Normalization)
@@ -122,11 +130,34 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     // _WorldSpaceCameraPos 来自 UnityInput.hlsl
     surface.viewDirection = normalize(_WorldSpaceCameraPos - input.positionWS);
     surface.metallic = GetMetallic(input.baseUV);
+    surface.occlusion = GetOcclusion(input.baseUV); // me08: 从 Mask G 通道读遮蔽
+    #if defined(_DETAIL_MAP)
+    surface.smoothness = GetSmoothness(input.baseUV, input.detailUV); // me08: 细节调制光滑度
+    #else
     surface.smoothness = GetSmoothness(input.baseUV);
+    #endif
     surface.fresnelStrength = GetFresnel(input.baseUV); // me07: 从材质读取 Fresnel 滑条
-    // A. 法线：归一化插值后的法线
-    surface.normal = normal;
-    
+    // me08: 法线设置（条件编译决定是否用法线贴图）
+    #if defined(_NORMAL_MAP)
+        // 有法线贴图：切线空间法线 → 世界空间
+        #if defined(_DETAIL_MAP)
+        surface.normal = NormalTangentToWorld(
+            GetNormalTS(input.baseUV, input.detailUV),
+            input.normalWS, input.tangentWS
+        );
+        #else
+        surface.normal = NormalTangentToWorld(
+            GetNormalTS(input.baseUV),
+            input.normalWS, input.tangentWS
+        );
+        #endif
+        surface.interpolatedNormal = input.normalWS; // Shadow Bias 用几何法线
+    #else
+        // 没有法线贴图：直接用插值几何法线
+        surface.normal = normalize(input.normalWS);
+        surface.interpolatedNormal = surface.normal;
+    #endif
+
     surface.position = input.positionWS;
     
     //得到相机坐标下的离相机距离就是深度 用于 当离相机远了就不生成阴影

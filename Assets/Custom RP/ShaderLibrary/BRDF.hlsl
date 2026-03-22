@@ -59,7 +59,8 @@ float3 IndirectBRDF(Surface surface, BRDF brdf, float3 diffuse, float3 specular)
     float3 reflection = specular * lerp(brdf.specular, brdf.fresnel, fresnelStrength);
     // 粗糙度越高，镜面反射越弱（光线被散射掉了）
     reflection /= brdf.roughness * brdf.roughness + 1.0;
-    return diffuse * brdf.diffuse + reflection;
+    // me08: occlusion 只影响间接光（直接光不受遮蔽贴图影响）
+    return (diffuse * brdf.diffuse + reflection) * surface.occlusion;
 }
 
 #endif

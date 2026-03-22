@@ -3,11 +3,15 @@ Shader "Custom RP/Lit"{
     Properties {
         //在编辑器面板添加颜色选择器。
         // 变量名("显示名", 类型) = 默认值
-        _BaseMap("Texture", 2D) = "white" {} // 纹理槽
+        _BaseMap("Texture", 2D) = "white" {}
         _BaseColor("Color", Color) = (1.0, 1.0, 1.0, 1.0)
-         // --- 新增渲染状态控制 ---
-         // --- 新增 PBR 属性 ---
+        // --- PBR 属性 ---
+        // me08: Mask Map (MODS) - 一张贴图4通道控制4种属性
+        // NoScaleOffset: 和 BaseMap 共用 Tiling/Offset，不单独设置
+        [Toggle(_MASK_MAP)] _MaskMapToggle ("Mask Map", Float) = 0
+        [NoScaleOffset] _MaskMap("Mask (MODS)", 2D) = "white" {}
         _Metallic ("Metallic", Range(0, 1)) = 0
+        _Occlusion ("Occlusion", Range(0, 1)) = 1 // me08: 遮蔽强度（0=无遮蔽, 1=完整遮蔽）
         _Smoothness ("Smoothness", Range(0, 1)) = 0.5
         _Fresnel ("Fresnel", Range(0, 1)) = 1  // me07: 菲涅尔强度（1=完整反射边缘, 0=关闭）
         // --------------------
@@ -46,7 +50,17 @@ Shader "Custom RP/Lit"{
         [NoScaleOffset] _EmissionMap("Emission", 2D) = "white" {}
         // HDR：允许颜色亮度超过 1（用于非常明亮的发光效果，比如霓虹灯/岩浆）
         [HDR] _EmissionColor("Emission", Color) = (0.0, 0.0, 0.0, 0.0)
-        // -----------------
+        // me08: Detail Map - 高频细节叠加（默认 linearGrey，0.5=中性=不改变任何属性）
+        [Toggle(_DETAIL_MAP)] _DetailMapToggle ("Detail Maps", Float) = 0
+        _DetailMap("Details", 2D) = "linearGrey" {}  // 有自己的 Tiling 设置
+        _DetailAlbedo("Detail Albedo", Range(0, 1)) = 1    // 细节对颜色的影响强度
+        _DetailSmoothness("Detail Smoothness", Range(0, 1)) = 1 // 细节对光滑度的影响强度
+        // me08: Normal Map（法线贴图）=让平面看起来有凹凸的光照欺骗
+        [Toggle(_NORMAL_MAP)] _NormalMapToggle ("Normal Map", Float) = 0
+        [NoScaleOffset] _NormalMap("Normals", 2D) = "bump" {}  // "bump" = 平坦法线默认值
+        _NormalScale("Normal Scale", Range(0, 1)) = 1           // 法线强度（0=无效果, 1=完整）
+        [NoScaleOffset] _DetailNormalMap("Detail Normals", 2D) = "bump" {}
+        _DetailNormalScale("Detail Normal Scale", Range(0, 1)) = 1
         
         // --- 烘焙透明度兼容用的隐藏属性 ---
         // 因为光照烘焙器只认识 _MainTex 和 _Color，不认识我们自定义的 _BaseMap 和 _BaseColor
@@ -108,10 +122,11 @@ Shader "Custom RP/Lit"{
             #pragma multi_compile _ LIGHTMAP_ON
             //me06 Shadow Mask 变体（让 _SHADOW_MASK_DISTANCE 关键词生效）
             #pragma multi_compile _ _SHADOW_MASK_ALWAYS _SHADOW_MASK_DISTANCE
-
-
             //me07 LOD 变体
             #pragma multi_compile _ LOD_FADE_CROSSFADE
+            #pragma shader_feature _MASK_MAP    // me08: Mask Map 开关
+            #pragma shader_feature _DETAIL_MAP  // me08: Detail Map 开关
+            #pragma shader_feature _NORMAL_MAP  // me08: Normal Map 开关（只在主 Pass 需要）
             // 3. 核心逻辑不写在这里，而是引用外部文件
             // 注意：这一步会导致报错，因为文件还没创建，这是正常的
             #include "LitPass.hlsl"            // ✅ 引用 Lit 文件
