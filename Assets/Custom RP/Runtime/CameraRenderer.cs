@@ -161,7 +161,14 @@ public partial class CameraRenderer
             // -----------------
             //me05 你不主动写unity就不得发送,这里是要static物体的烘焙好的光照贴图坐标数据
             //me05 光照探针数据也要上报,不是这个光照探针又是什么鬼物体为什么要存储光照探针数据??存储的是什么
-            perObjectData = PerObjectData.Lightmaps | PerObjectData.LightProbe
+
+            //me06你要解释一下了这些
+            perObjectData = 
+                PerObjectData.Lightmaps          // 用了 Lightmap → 传 Lightmap UV
+                | PerObjectData.ShadowMask       // 用了 ShadowMask → 传 ShadowMask 贴图绑定
+                | PerObjectData.LightProbe       // 用了探针 → 传 SH 系数
+                | PerObjectData.OcclusionProbe   // 用了遮挡探针 → 传 unity_ProbesOcclusion ← 刚加的
+                | PerObjectData.LightProbeProxyVolume  // 用了 LPPV → 传 LPPV 数据
         };
         
         // 关键：添加第二个 Pass Name

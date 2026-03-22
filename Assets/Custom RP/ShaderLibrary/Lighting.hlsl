@@ -44,11 +44,20 @@ float3 GetLighting (Surface surface, BRDF brdf, Light light) {
 // 5. 主循环
 float3 GetLighting (Surface surfaceWS, BRDF brdf, GI gi) {
     ShadowData shadowData = GetShadowData(surfaceWS);
+    // me06：把 GI 模块读到的烘焙遮罩数据搬运给阴影计算模块
+    shadowData.shadowMask = gi.shadowMask;
     float3 color = gi.diffuse * brdf.diffuse;
     for (int i = 0; i < GetDirectionalLightCount(); i++) {
         Light light = GetDirectionalLight(i, surfaceWS, shadowData);
         color += GetLighting(surfaceWS, brdf, light);
     }
+    // ========= 📸 DEBUG 可视化（用哪行取消注释哪行）=========
+    //return gi.shadowMask.shadows.rrr;   // Shadow Mask R通道（第1盏灯）：黑=有阴影 白=无阴影
+    //return gi.shadowMask.shadows.ggg;   // Shadow Mask G通道（第2盏灯）
+    //return gi.shadowMask.shadows.rgba;  // Shadow Mask 全4通道彩色（RGBA=4盏灯）
+    //return gi.diffuse;                  // Lightmap间接光：彩色，代表弹射光颜色分布
+    //return float3(shadowData.shadowMask.distance, 0, 0); // 红=Distance模式已激活
+    // =========================================================
     return color;
 }
 

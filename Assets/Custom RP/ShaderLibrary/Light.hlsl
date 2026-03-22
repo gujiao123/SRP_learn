@@ -1,4 +1,4 @@
-﻿#ifndef CUSTOM_LIGHT_INCLUDED
+#ifndef CUSTOM_LIGHT_INCLUDED
 #define CUSTOM_LIGHT_INCLUDED
 
 // 定义最大灯光数，必须和 C# 里的 maxDirLightCount 一致！
@@ -36,14 +36,16 @@ int GetDirectionalLightCount () {
 DirectionalShadowData GetDirectionalShadowData(int lightIndex, ShadowData shadowData)
 {
     DirectionalShadowData data;
-    //阴影强度 增加shadowData.strength 纯粹是为了截断超过级联阴影的阴影,直接不显示,当然可以自己顶一个强度把
-    //超过了 就是data.strength=0 代表全亮 无阴影 
-    data.strength = _DirectionalLightShadowData[lightIndex].x * shadowData.strength;
+    // me06：不再乘以 shadowData.strength！
+    // 原因：远处 shadowData.strength→0 会让 directional.strength→0
+    // 导致 GetDirectionalShadowAttenuation 提前返回 1.0（全亮），
+    // 永远无法走到 MixBakedAndRealtimeShadows 去使用烘焙阴影！
+    // 现在把 global.strength 的处理权留给 MixBakedAndRealtimeShadows。
+    data.strength = _DirectionalLightShadowData[lightIndex].x; // ← 只取灯光自身强度
     //Tile索引
-    data.tileIndex = _DirectionalLightShadowData[lightIndex].y+ shadowData.cascadeIndex;
-    
+    data.tileIndex = _DirectionalLightShadowData[lightIndex].y + shadowData.cascadeIndex;
     data.normalBias = _DirectionalLightShadowData[lightIndex].z;
-
+    data.shadowMaskChannel = _DirectionalLightShadowData[lightIndex].w; // me06c：读取通道号 哪一个灯光的shadowmask
     return data;
 }
 

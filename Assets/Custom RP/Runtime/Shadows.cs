@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.Rendering;
 
 
@@ -67,7 +67,17 @@ public class Shadows {
         this.settings = settings;
         
         shadowedDirectionalLightCount = 0; // 重置计数
+        useShadowMask = false; // me06：每帧重置，避免上帧状态污染
     }
+
+    //me06使用shadowmask 两种模式 _SHADOW_MASK_ALWAYS就是 静态的烘焙的阴影一直存在 不受到距离调节
+    static string[] shadowMaskKeywords = {
+    "_SHADOW_MASK_ALWAYS",   // index 0
+    "_SHADOW_MASK_DISTANCE"  // index 1
+};
+    bool useShadowMask; // 这帧有没有需要 Shadow Mask 的灯？
+    
+    
     
     // 公共接口：供 Lighting.cs 调用，预留阴影槽位
     //每帧执行，用于为light配置shadow altas（shadowMap）上预留一片空间来渲染阴影贴图，同时存储一些其他必要信息
@@ -75,19 +85,39 @@ public class Shadows {
     /// 公共接口：供 Lighting.cs 调用，预留阴影槽位 
     /// </summary>
     /// <param name="light"></param>
-    /// <param name="visibleLightIndex"></param>
+    /// <param name="visibleLightIndex">除光照剔除外，剔除的灯光烘焙的光也会被剔除</param>
     /// <returns>一个是灯光强度 一个是对应灯光的ID用于对应阴影贴图</returns>
-    public Vector3 ReserveDirectionalShadows (Light light, int visibleLightIndex) {
+    public Vector4 ReserveDirectionalShadows (Light light, int visibleLightIndex) {
+
+        float maskChannel = -1;  // -1 = 没有 Shadow Mask（不读任何通道）
         // 检查是否有空位，且光源真的需要阴影
         //!!这个就需要 在 light设置里面选择 阴影类型
         if (shadowedDirectionalLightCount < maxShadowedDirectionalLightCount &&
             light.shadows != LightShadows.None && 
             light.shadowStrength > 0f
         ) {
-            // 检查是否有物体在阴影范围内
-            //Func ，cullingResults.GetShadowCasterBounds 该方法传入lightIndex为阴影投射光源的索引，outBounds为要计算的边界，其返回值为一个bool值，如果光源影响了场景中至少一个阴影投射对象，则为true。该方法返回封装了可见阴影投射物的包围盒（包围盒里的物体就是所有需要渲染到阴影贴图上的物体），其可用于动态调整级联范围。
 
-            if (cullingResults.GetShadowCasterBounds(visibleLightIndex, out Bounds b)) {
+
+        //me06 检查是否需要shadowmask 根据这个光是否是Mixed类型而且mixedLightingMode是Shadowmask
+        //?什么意思 这个shadowmask不是在render里面设置的吗 怎么跟light扯上关系了
+        // ① 先检查 Shadow Mask（移到这里！）
+        LightBakingOutput lightBaking = light.bakingOutput;
+        if (lightBaking.lightmapBakeType == LightmapBakeType.Mixed &&
+            lightBaking.mixedLightingMode == MixedLightingMode.Shadowmask) { 
+            useShadowMask = true;
+            // me06c：读取这盏灯分配到的通道号（Unity 烘焙时自动分配）
+            //   0 = R 通道（影响最大的第1盏灯）
+            //   1 = G 通道（第2盏灯）
+            //   2 = B 通道， 3 = A 通道...
+            maskChannel = lightBaking.occlusionMaskChannel;
+        }
+
+
+        // ② 再检查有没有实时投影体
+        // 检查是否有物体在阴影范围内
+        //Func ，cullingResults.GetShadowCasterBounds 该方法传入lightIndex为阴影投射光源的索引，outBounds为要计算的边界，其返回值为一个bool值，如果光源影响了场景中至少一个阴影投射对象，则为true。该方法返回封装了可见阴影投射物的包围盒（包围盒里的物体就是所有需要渲染到阴影贴图上的物体），其可用于动态调整级联范围。
+
+        if (cullingResults.GetShadowCasterBounds(visibleLightIndex, out Bounds b)) {
                 // 存储光源索引
                 shadowedDirectionalLights[shadowedDirectionalLightCount] = 
                     new ShadowedDirectionalLight {
@@ -95,15 +125,19 @@ public class Shadows {
                         slopeScaleBias = light.shadowBias,
                         nearPlaneOffset = light.shadowNearPlane//近平面偏移 用于解决暴力裁剪 留有余地
                     };
-                // 返回 阴影强度 和 阴影贴图索引 添加了级联 0-3->0-15
-                return new Vector3(
+                // 返回阴影强度、阴影贴图Index、法线偏移、通道号
+                return new Vector4(
                     light.shadowStrength,
-                    settings.directional.cascadeCount *shadowedDirectionalLightCount++,
-                    light.shadowNormalBias
+                    settings.directional.cascadeCount * shadowedDirectionalLightCount++,
+                    light.shadowNormalBias,
+                    maskChannel            // 第4分量 = Shadow Mask 通道号
                 );
             }
+            // ③ 没有实时投影体，但可能有 Shadow Mask
+            //me06 用负数 strength 告诉 Shader："跳过实时采样，去查 Shadow Mask！"
+            return new Vector4(-light.shadowStrength, 0f, 0f, maskChannel);
         }
-        return Vector3.zero;
+        return new Vector4(0f, 0f, 0f, -1f);  // 完全没有阴影，通道也是 -1
     }
     
     // 渲染阴影的主入口
@@ -181,7 +215,22 @@ public class Shadows {
         SetKeywords(
             cascadeBlendKeywords, (int)settings.directional.cascadeBlend - 1
         );
-        
+
+        //me06没有用多次的三元表达式
+        //me06b：根据 Quality Settings 决定使用哪种 Shadowmask 模式
+        int shadowMaskIndex = -1;
+        if (useShadowMask) {
+            switch (QualitySettings.shadowmaskMode) {
+                case ShadowmaskMode.Shadowmask:
+                    shadowMaskIndex = 0;  // Always 模式
+                    break;
+                case ShadowmaskMode.DistanceShadowmask:
+                    shadowMaskIndex = 1;  // Distance 模式
+                    break;
+            }
+        }
+        SetKeywords(shadowMaskKeywords, shadowMaskIndex);
+
         buffer.SetGlobalVector(
             shadowAtlasSizeId, new Vector4(atlasSize, 1f / atlasSize)
         );

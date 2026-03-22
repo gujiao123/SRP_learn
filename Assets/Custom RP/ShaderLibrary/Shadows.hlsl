@@ -1,4 +1,4 @@
-﻿#ifndef CUSTOM_SHADOWS_INCLUDED
+#ifndef CUSTOM_SHADOWS_INCLUDED
 #define CUSTOM_SHADOWS_INCLUDED
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Shadow/ShadowSamplingTent.hlsl"
@@ -45,16 +45,26 @@ CBUFFER_END
 
 /* --- 数据结构 --- */
 
+// ⚠️ 必须先定义 ShadowMask，因为 ShadowData 里面用到了它
+//me06 阴影遮罩shadowmask贴图
+struct ShadowMask {
+    bool always;    // ← 新加是否一直开启静态烘焙阴影
+    bool distance;   // 是否在使用 Distance Shadowmask 模式？ 这个和always是不同的模式,烘焙阴影受到距离影响
+    float4 shadows;  // 从贴图里采样到的 4 个通道（可以存 4 盏灯的遮挡数据！）
+};
+
 struct ShadowData {
     int cascadeIndex;
     float cascadeBlend; // 级联间的混合系数//用于不同级联之间的渐变过渡 也类似插值 属于0-1 等于1 代表完全不过度 也就是没有用啊 还有这个大于0
     float strength;     // 阴影总强度（基于全局距离衰减）//用于强行剔除级联外的阴影 (0-无阴影 1-有阴影) 应该说是 级联内外的分界线 按钮
+    ShadowMask shadowMask; // ← 新加的 阴影遮罩
 };
 
 struct DirectionalShadowData {
     float strength;     // 灯光阴影强度（由 Light 组件设置）
     int tileIndex;      // 对应阴影图集中的 Tile 索引
     float normalBias;   // 法线偏移量
+    int shadowMaskChannel; // me06c：Shadow Mask 通道号（-1=无烘焙, 0=R, 1=G, 2=B, 3=A）
 };
 
 /* --- 核心计算函数 --- */
@@ -76,6 +86,10 @@ float FadedShadowStrength(float dist, float scale, float fade) {
 ShadowData GetShadowData(Surface surfaceWS) {
     ShadowData data;
     data.cascadeBlend = 1.0; // 默认为 1（代表完全位于当前级联，不混合）
+    // me06 初始化 shadowMask，防止未定义垃圾值
+    data.shadowMask.always = false;   // me06b 新加
+    data.shadowMask.distance = false;
+    data.shadowMask.shadows = 1.0;
     
     // 1. 全局距离衰减：超出最大阴影距离后阴影逐渐消失shadowsetting设置
     data.strength = FadedShadowStrength(
@@ -173,24 +187,16 @@ float FilterDirectionalShadow (float3 positionSTS) {
     #endif
 }
 
-/**
- * \brief 计算最终方向光阴影衰减值 [0, 1]
- */
-float GetDirectionalShadowAttenuation(DirectionalShadowData directional, ShadowData global, Surface surfaceWS) {
-    //忽略不开启阴影和阴影强度为0的光源
-    if(directional.strength <= 0.0)
-    {
-        return 1.0;
-    }
-    
-    //只有人为定义了材质可以接受阴影才会显示阴影
-    #if !defined(_RECEIVE_SHADOWS)
-    return 1.0;
-    #endif
 
-    // 计算当前级联下的法线偏移，解决自阴影（Shadow Acne）问题
-    float3 normalBias = surfaceWS.normal * (directional.normalBias * _CascadeData[global.cascadeIndex].y);
-    //根据对应Tile阴影变换矩阵和片元的世界坐标计算Tile上的像素坐标STS
+//me06
+// 新函数：只负责实时级联阴影的采样
+float GetCascadedShadow(
+    DirectionalShadowData directional, ShadowData global, Surface surfaceWS
+) {
+     // 计算当前级联下的法线偏移，解决自阴影（Shadow Acne）问题
+    float3 normalBias = surfaceWS.normal * 
+        (directional.normalBias * _CascadeData[global.cascadeIndex].y);
+         //根据对应Tile阴影变换矩阵和片元的世界坐标计算Tile上的像素坐标STS
     //data.tileIndex 告诉它：“去查第几个矩阵”，从而确保它能定位到大图集里正确的那个小格（Tile）。
     float3 positionSTS = mul(
         _DirectionalShadowMatrices[directional.tileIndex], 
@@ -201,25 +207,106 @@ float GetDirectionalShadowAttenuation(DirectionalShadowData directional, ShadowD
 
     // 级联混合逻辑：如果 blend < 1，说明需要对下一级级联采样并混合
     // 注意：若未定义 _CASCADE_BLEND_SOFT，此处的 if 分支会被编译器优化剔除
+    // 级联混合
     if (global.cascadeBlend < 1.0) {
-        normalBias = surfaceWS.normal * (directional.normalBias * _CascadeData[global.cascadeIndex + 1].y);
+        normalBias = surfaceWS.normal * 
+            (directional.normalBias * _CascadeData[global.cascadeIndex + 1].y);
         positionSTS = mul(
             _DirectionalShadowMatrices[directional.tileIndex + 1],
             float4(surfaceWS.position + normalBias, 1.0)
         ).xyz;
-        
-        // 执行混合：lerp(远级阴影, 近级阴影, 混合系数)
+         // 执行混合：lerp(远级阴影, 近级阴影, 混合系数)
         shadow = lerp(FilterDirectionalShadow(positionSTS), shadow, global.cascadeBlend);
     }
+    return shadow;
+}
 
-    //考虑光源的阴影强度，strength为0，依然没有阴影
-    //不至于lerp(a,b,t) 使得 根据阴影强度可以控制
-    /*
-    如果 strength 是 0：旋钮在最左边，输出全亮 1.0（阴影消失了）。
+// 从 Shadow Mask 里取对应通道的遮挡值
+float GetBakedShadow(ShadowMask mask, int channel) {
+    float shadow = 1.0;
+    // me06b：always 和 distance 两种模式都需要读烘焙数据
+    if (mask.always || mask.distance) {
+        if (channel >= 0) {
+            shadow = mask.shadows[channel]; // me06c：动态选择通道！R/G/B/A
+        }
+    }
+    return shadow;
+}
+// 带强度衰减的版本
+float GetBakedShadow(ShadowMask mask, int channel, float strength) {
+    if (mask.always || mask.distance) {
+        return lerp(1.0, GetBakedShadow(mask, channel), strength);
+    }
+    return 1.0;
+}
+
+float MixBakedAndRealtimeShadows(
+    ShadowData global, float shadow, int shadowMaskChannel, float strength
+) {
+    float baked = GetBakedShadow(global.shadowMask, shadowMaskChannel);
+    
+    // me06b：Always 模式 - 静态物体永远用烘焙，动态物体叠加实时
+    if (global.shadowMask.always) {
+        // 实时阴影按距离淡出（超过 MaxDistance 就消失）
+        shadow = lerp(1.0, shadow, global.strength);
+        // min：取实时和烘焙中较暗的那个（两者同时生效）
+        // 动态物体实时阴影 + 静态物体烘焙阴影 = 同时可见
+        shadow = min(baked, shadow);
+        return lerp(1.0, shadow, strength);
+    }
+    if (global.shadowMask.distance) {
+        // Distance 模式：近处用实时，远处用烘焙
+        shadow = lerp(baked, shadow, global.strength);
+        return lerp(1.0, shadow, strength);
+    }
+    // 没有 Shadow Mask：走原来的逻辑
+    return lerp(1.0, shadow, strength * global.strength);
+}
+/**
+ * \brief 计算最终方向光阴影衰减值 [0, 1]
+ */
+float GetDirectionalShadowAttenuation(
+     DirectionalShadowData directional, ShadowData global, Surface surfaceWS
+)
+{
+
+    //只有人为定义了材质可以接受阴影才会显示阴影
+    #if !defined(_RECEIVE_SHADOWS)
+    return 1.0;
+    #endif
+    float shadow;
+    //me06 为了判断使用实时阴影还是烘焙阴影
+
+    //me06 global.strength 近处=1.0，超出 Max Distance=0.0 Shadow Settings 的 Max Distance
+    //me06directional.strength 这盏灯的阴影强度是多少？ Light 组件的 Shadow Strength 属性
+//     ① 摄像机退很远，超出 Max Shadow Distance：
+//     directional.strength = 1.0（灯很亮，正常）
+//     global.strength = 0.0（太远了）
+//     相乘 = 0 → 进入烘焙阴影分支！✅
+// ② 灯没有实时投影体（我们返回了负数）：
+//     directional.strength = -1.0（负数信号）
+//     global.strength = 1.0（摄像机很近，没问题）
+//     相乘 = -1.0 → 也是 ≤ 0 → 进入烘焙阴影分支！✅
+// ③ 正常情况：
+//     directional.strength = 1.0
+//     global.strength = 1.0
+//     相乘 = 1.0 → 走实时阴影分支 ✅
+    if (directional.strength * global.strength <= 0.0) {
+        // 远处或无实时投影体时：直接返回烘焙阴影
+        shadow = GetBakedShadow(
+            global.shadowMask, directional.shadowMaskChannel, abs(directional.strength)
+        );
+    } else {
+        shadow = GetCascadedShadow(directional, global, surfaceWS);
+        shadow = MixBakedAndRealtimeShadows(
+            global, shadow, directional.shadowMaskChannel, directional.strength
+        );
+    }
+    /*如果 strength 是 0：旋钮在最左边，输出全亮 1.0（阴影消失了）。
     如果 strength 是 1：旋钮在最右边，输出原始结论 shadow（该黑的地方全黑）。
     如果 strength 是 0.5：输出 0.5 + 0.5 * shadow，原本全黑的地方变成了半灰。*/
-    //为了艺术效果
-    return lerp(1.0, shadow, directional.strength * global.strength);
+    return shadow;
 }
+
 
 #endif

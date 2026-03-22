@@ -24,6 +24,18 @@
 #define UNITY_PREV_MATRIX_I_M unity_prev_MatrixIM
 #define UNITY_MATRIX_P glstate_matrix_projection
 
+//me06什么意思 告诉 Core 库：我们要用 Shadow Mask 你定义
+
+// Unity 内部 UnityInstancing.hlsl 里大概是这样：
+//#if defined(SHADOWS_SHADOWMASK)
+//    UNITY_INSTANCED_PROP(float4, unity_ProbesOcclusion)  // 按实例分发
+//#endif
+
+
+//me06 告诉 UnityInstancing：要透传遮挡数据
+#if defined(_SHADOW_MASK_ALWAYS) || defined(_SHADOW_MASK_DISTANCE)
+    #define SHADOWS_SHADOWMASK 
+#endif
 
 // 1. 引入通用库 (注意路径引用，.. 表示上一级目录)
 // --- 顺序非常重要 ---

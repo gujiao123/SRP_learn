@@ -4,8 +4,13 @@ Shader "Custom RP/Unlit"{
         //在编辑器面板添加颜色选择器。
         // 变量名("显示名", 类型) = 默认值
         // [HDR]：允许颜色亮度超过 1，让 Unlit 材质能作为非常明亮的自发光使用
+        _BaseMap("Texture", 2D) = "white" {} // 补充：让 Unlit 也能贴图
         [HDR] _BaseColor("Color", Color) = (1.0, 1.0, 1.0, 1.0)
-         // --- 新增渲染状态控制 ---
+        _Cutoff ("Alpha Cutoff", Range(0.0, 1.0)) = 0.5 // 补充：用于 Alpha Clipping
+        
+        // --- 新增渲染状态控制 ---
+        [Toggle(_CLIPPING)] _Clipping ("Alpha Clipping", Float) = 0 // 补充：控制开启裁剪
+        [KeywordEnum(On, Clip, Dither, Off)] _Shadows ("Shadows", Float) = 0 // 补充：设置阴影模式
         
         //SrcBlend (源混合因子)：新画上去的颜色占多少比例？
         //DstBlend (目标混合因子)：屏幕上原本的颜色保留多少比例？

@@ -8,7 +8,7 @@
 //这样cpu叫gpu干活只需要叫他去取对应位置比如材质A信息+材质A所有物体的信息即可,
 //对应的MPB (MaterialPropertyBlock)就会改变材质信息,生成材质B 就不会走SRP batcher了,
 CBUFFER_START(UnityPerDraw)
-    float4x4 unity_ObjectToWorld;
+float4x4 unity_ObjectToWorld;
 float4x4 unity_WorldToObject;
 // 这是一个特殊的 Hack：
 // SRP Batcher 要求 UnityPerDraw 必须包含 unity_LODFade
@@ -16,6 +16,7 @@ float4x4 unity_WorldToObject;
 float4 unity_LODFade; 
 float4 unity_WorldTransformParams;
 
+float4 unity_ProbesOcclusion;  //me06 ← 新增：Unity 自动传进来的遮挡探针数据
 // 这两兄弟是光照贴图的御用偏移值：
 float4 unity_LightmapST;
 // ⚠️警告：即使我们平时不用动态混合烘焙，也必须加这句占位，否则底层 SRP Batcher 合批特性会因为找不到它而崩溃报错！

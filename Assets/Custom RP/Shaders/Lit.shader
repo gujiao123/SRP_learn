@@ -98,8 +98,6 @@ Shader "Custom RP/Lit"{
 			#pragma multi_compile _ _CASCADE_BLEND_SOFT _CASCADE_BLEND_DITHER
              // 新增 Feature 宏
             #pragma shader_feature _PREMULTIPLY_ALPHA
- 	        //接受阴影 
-            #pragma shader_feature _RECEIVE_SHADOWS
 
             // 2. 告诉编译器，顶点和片元着色器的入口函数名叫什么,类似main函数作为入口
             #pragma vertex LitPassVertex       
@@ -107,7 +105,12 @@ Shader "Custom RP/Lit"{
             
             //me05 警告编译器：分化去生成一个带光照贴图处理逻辑的 Shader 平行宇宙变体
             #pragma multi_compile _ LIGHTMAP_ON
+            //me06 Shadow Mask 变体（让 _SHADOW_MASK_DISTANCE 关键词生效）
+            #pragma multi_compile _ _SHADOW_MASK_ALWAYS _SHADOW_MASK_DISTANCE
 
+
+            //me07 LOD 变体
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
             // 3. 核心逻辑不写在这里，而是引用外部文件
             // 注意：这一步会导致报错，因为文件还没创建，这是正常的
             #include "LitPass.hlsl"            // ✅ 引用 Lit 文件

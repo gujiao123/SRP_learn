@@ -31,11 +31,26 @@
 struct GI {
     // 漫反射的全局间接光颜色
     float3 diffuse;
+    ShadowMask shadowMask; //me06 ← 新加的 阴影遮罩 因为 Shadow Mask 是烘焙数据，它来自场景而不来自实时光源。
 };
 
 // 2. 声明引擎通过 C++ 在后台悄悄绑定在内存里的那张巨大图集，以及它的采样器规则：
 TEXTURE2D(unity_Lightmap);
 SAMPLER(samplerunity_Lightmap);
+
+TEXTURE2D(unity_ShadowMask);
+SAMPLER(samplerunity_ShadowMask);
+
+
+// 采样函数（只在有 Lightmap 的静态物体上采样）
+float4 SampleBakedShadows(float2 lightMapUV) {
+    #if defined(LIGHTMAP_ON)
+        return SAMPLE_TEXTURE2D(unity_ShadowMask, samplerunity_ShadowMask, lightMapUV);
+    #else
+       return unity_ProbesOcclusion;  // ← 改这里！不再是1.0了
+    #endif
+}
+
 // 3. 在那个结构体的下面，新增官方拿真货贴图的神仙函数！
 float3 SampleLightMap (float2 lightMapUV) {
 #if defined(LIGHTMAP_ON)
@@ -83,6 +98,22 @@ GI GetGI (float2 lightMapUV, Surface surfaceWS) {
     GI gi;
     // 核心汇流：如果是静态，前项发挥作用，后项为 0；如果是动态怪，前项没图变 0，后项发力。
     gi.diffuse = SampleLightMap(lightMapUV) + SampleLightProbe(surfaceWS);
+
+ // 默认值：没有 Shadow Mask
+    gi.shadowMask.always = false;   // me06b 新加
+    gi.shadowMask.distance = false;
+    gi.shadowMask.shadows = 1.0; // 全白 = 没有任何遮挡
+    
+    // ↓ 重点在这里 ↓
+#if defined(_SHADOW_MASK_ALWAYS)
+    gi.shadowMask.always = true;
+    gi.shadowMask.shadows = SampleBakedShadows(lightMapUV);
+#elif defined(_SHADOW_MASK_DISTANCE)
+    gi.shadowMask.distance = true;
+    gi.shadowMask.shadows = SampleBakedShadows(lightMapUV);
+#endif
+    
+
     return gi;
 }
 #endif
