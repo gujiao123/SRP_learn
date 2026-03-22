@@ -3,6 +3,7 @@
 
 // 1. 在 GI.hlsl 的 #ifndef 区域的最首部（最上面）引入官方基建：
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/EntityLighting.hlsl"
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/ImageBasedLighting.hlsl" // me07: 粗糙度→mip级别转换
 
 // 一旦上游激活了这个光照开关贴图宏
 #if defined(LIGHTMAP_ON)
@@ -29,9 +30,9 @@
 
 // 我们用一个结构体把所有的全局光照数据打包
 struct GI {
-    // 漫反射的全局间接光颜色
-    float3 diffuse;
-    ShadowMask shadowMask; //me06 ← 新加的 阴影遮罩 因为 Shadow Mask 是烘焙数据，它来自场景而不来自实时光源。
+    float3 diffuse;     // 间接漫反射光（Lightmap + 探针）
+    float3 specular;    // me07: 间接镜面反射光（环境 CubeMap）
+    ShadowMask shadowMask;
 };
 
 // 2. 声明引擎通过 C++ 在后台悄悄绑定在内存里的那张巨大图集，以及它的采样器规则：
@@ -40,6 +41,10 @@ SAMPLER(samplerunity_Lightmap);
 
 TEXTURE2D(unity_ShadowMask);
 SAMPLER(samplerunity_ShadowMask);
+
+// me07: 反射探针 / 天空盒的 CubeMap（立方体贴图）
+TEXTURECUBE(unity_SpecCube0);
+SAMPLER(samplerunity_SpecCube0);
 
 
 // 采样函数（只在有 Lightmap 的静态物体上采样）
@@ -92,12 +97,30 @@ float3 SampleLightProbe (Surface surfaceWS) {
 }
 
 
+// me07: 采样环境反射 CubeMap 默认是天空盒贴图
+// 输入: 表面信息(法线+视角), 精确粗糙度→决定采样哪个 mip 级别
+float3 SampleEnvironment(Surface surfaceWS, BRDF brdf) {
+    // 计算反射方向：视角向量关于法线锾射
+    //三维的哦 
+    //me07不是说反射很消耗性能吗 不是半程向量吗
+    float3 uvw = reflect(-surfaceWS.viewDirection, surfaceWS.normal);
+    // 粗糙度 → mip 级别：粗糙度越高采样越模糊的级别（模拟散射模糊效果）
+    float mip = PerceptualRoughnessToMipmapLevel(brdf.perceptualRoughness);
+
+    //me07这里默认是天空盒贴图
+    float4 environment = SAMPLE_TEXTURECUBE_LOD(
+        unity_SpecCube0, samplerunity_SpecCube0, uvw, mip
+    );
+    // DecodeHDREnvironment：处理 HDR 格式 + 探针强度调节
+    return DecodeHDREnvironment(environment, unity_SpecCube0_HDR);
+}
+
 // 4. 把我们之前写的实习生 GetGI 里面的那句测试红绿伪代码删掉，彻底接手真正的图谱！
 // 注意多加一个输入参数：表面信息 Surface (配合新兄弟)
-GI GetGI (float2 lightMapUV, Surface surfaceWS) {
+GI GetGI (float2 lightMapUV, Surface surfaceWS, BRDF brdf) {
     GI gi;
-    // 核心汇流：如果是静态，前项发挥作用，后项为 0；如果是动态怪，前项没图变 0，后项发力。
     gi.diffuse = SampleLightMap(lightMapUV) + SampleLightProbe(surfaceWS);
+    gi.specular = SampleEnvironment(surfaceWS, brdf); // me07: 采样环境反射
 
  // 默认值：没有 Shadow Mask
     gi.shadowMask.always = false;   // me06b 新加

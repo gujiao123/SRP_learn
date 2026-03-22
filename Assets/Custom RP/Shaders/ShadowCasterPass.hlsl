@@ -22,6 +22,9 @@ struct Varyings {
 };
 
 Varyings ShadowCasterPassVertex (Attributes input) {
+
+
+
     Varyings output;
     //从input中提取实例的ID并将其存储在其他实例化宏所依赖的全局静态变量中
     UNITY_SETUP_INSTANCE_ID(input);
@@ -61,6 +64,9 @@ Varyings ShadowCasterPassVertex (Attributes input) {
 
 // Fragment Shader：只负责 Alpha Clipping，不输出颜色
 void ShadowCasterPassFragment (Varyings input) {
+   //me07 ShadowCasterPassFragment 最开始  
+    ClipLOD(input.positionCS.xy, unity_LODFade.x);
+
     //从input中提取实例的ID并将其存储在其他实例化宏所依赖的全局静态变量中
     UNITY_SETUP_INSTANCE_ID(input);
     

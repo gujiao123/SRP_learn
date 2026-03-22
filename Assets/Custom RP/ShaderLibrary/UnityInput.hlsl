@@ -1,4 +1,4 @@
-﻿#ifndef CUSTOM_UNITY_INPUT_INCLUDED
+#ifndef CUSTOM_UNITY_INPUT_INCLUDED
 #define CUSTOM_UNITY_INPUT_INCLUDED
 
 
@@ -16,7 +16,7 @@ float4x4 unity_WorldToObject;
 float4 unity_LODFade; 
 float4 unity_WorldTransformParams;
 
-float4 unity_ProbesOcclusion;  //me06 ← 新增：Unity 自动传进来的遮挡探针数据
+
 // 这两兄弟是光照贴图的御用偏移值：
 float4 unity_LightmapST;
 // ⚠️警告：即使我们平时不用动态混合烘焙，也必须加这句占位，否则底层 SRP Batcher 合批特性会因为找不到它而崩溃报错！
@@ -31,6 +31,8 @@ float4 unity_SHBr;
 float4 unity_SHBg;
 float4 unity_SHBb;
 float4 unity_SHC;
+float4 unity_ProbesOcclusion;  //me06 ← 新增：Unity 自动传进来的遮挡探针数据
+float4 unity_SpecCube0_HDR;     // me07: 反射探针 HDR 解码参数
 CBUFFER_END
 
 

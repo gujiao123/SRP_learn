@@ -164,11 +164,13 @@ public partial class CameraRenderer
 
             //me06你要解释一下了这些
             perObjectData = 
-                PerObjectData.Lightmaps          // 用了 Lightmap → 传 Lightmap UV
-                | PerObjectData.ShadowMask       // 用了 ShadowMask → 传 ShadowMask 贴图绑定
-                | PerObjectData.LightProbe       // 用了探针 → 传 SH 系数
-                | PerObjectData.OcclusionProbe   // 用了遮挡探针 → 传 unity_ProbesOcclusion ← 刚加的
-                | PerObjectData.LightProbeProxyVolume  // 用了 LPPV → 传 LPPV 数据
+                PerObjectData.Lightmaps
+                | PerObjectData.ShadowMask
+                | PerObjectData.LightProbe
+                | PerObjectData.OcclusionProbe
+                | PerObjectData.LightProbeProxyVolume
+                | PerObjectData.OcclusionProbeProxyVolume
+                | PerObjectData.ReflectionProbes   // me07: 传递反射探针数据
         };
         
         // 关键：添加第二个 Pass Name

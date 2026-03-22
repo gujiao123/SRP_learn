@@ -56,6 +56,22 @@ float DistanceSquared(float3 pA, float3 pB) {
 }
 
 
+
+
+// 思路：用抖动图案来"挖掉"一部分像素，制造半透明过渡效果
+// fade > 0 → 正在淡出（从1减到0）
+// fade < 0 → 正在淡入（从-1增到0）
+void ClipLOD(float2 positionCS, float fade) {
+    #if defined(LOD_FADE_CROSSFADE)
+        float dither = InterleavedGradientNoise(positionCS.xy, 0);
+        clip(fade + (fade < 0.0 ? dither : -dither));
+    #endif
+}
+
+
+
+
+
 //已经在官方实现
 // 封装函数：从对象空间 -> 世界空间
 /*float3 TransformObjectToWorld (float3 positionOS) {

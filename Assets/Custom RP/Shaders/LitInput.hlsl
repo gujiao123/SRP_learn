@@ -22,6 +22,7 @@ UNITY_INSTANCING_BUFFER_START(UnityPerMaterial)
     UNITY_DEFINE_INSTANCED_PROP(float,  _Cutoff)      // Alpha 剪裁阈值
     UNITY_DEFINE_INSTANCED_PROP(float,  _Metallic)    // 金属度
     UNITY_DEFINE_INSTANCED_PROP(float,  _Smoothness)  // 光滑度
+    UNITY_DEFINE_INSTANCED_PROP(float,  _Fresnel)  // me07: 菲涅耳反射强度滑条
 UNITY_INSTANCING_BUFFER_END(UnityPerMaterial)
 
 // =============================================
@@ -65,6 +66,11 @@ float3 GetEmission (float2 baseUV) {
     float4 map   = SAMPLE_TEXTURE2D(_EmissionMap, sampler_BaseMap, baseUV);
     float4 color = UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _EmissionColor);
     return map.rgb * color.rgb;
+}
+
+// me07: 菲涅耳强度滑条（1.0=开启菲涅耳，0.0=关闭）
+float GetFresnel (float2 baseUV) {
+    return UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _Fresnel);
 }
 
 #endif

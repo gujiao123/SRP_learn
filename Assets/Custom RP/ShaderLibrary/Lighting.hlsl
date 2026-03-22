@@ -46,7 +46,8 @@ float3 GetLighting (Surface surfaceWS, BRDF brdf, GI gi) {
     ShadowData shadowData = GetShadowData(surfaceWS);
     // me06：把 GI 模块读到的烘焙遮罩数据搬运给阴影计算模块
     shadowData.shadowMask = gi.shadowMask;
-    float3 color = gi.diffuse * brdf.diffuse;
+    // me07: 用 IndirectBRDF 合并漫反射间接光 + 镜面环境反射
+    float3 color = IndirectBRDF(surfaceWS, brdf, gi.diffuse, gi.specular);
     for (int i = 0; i < GetDirectionalLightCount(); i++) {
         Light light = GetDirectionalLight(i, surfaceWS, shadowData);
         color += GetLighting(surfaceWS, brdf, light);

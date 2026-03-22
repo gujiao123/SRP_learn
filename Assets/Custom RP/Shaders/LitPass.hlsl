@@ -94,6 +94,9 @@ Varyings LitPassVertex (Attributes input) {
 // 职责：计算像素颜色。
 // : SV_TARGET 是语义，告诉 GPU 把这个颜色输出到帧缓存
 float4 LitPassFragment (Varyings input) : SV_TARGET {
+    //me07：LOD Cross-Fade
+    // unity_LODFade.x 由 Unity 自动填入：正数=淡出，负数=淡入
+    ClipLOD(input.positionCS.xy, unity_LODFade.x);
     // 1. 提取 ID：从 input 中拿到刚才传过来的 ID
     UNITY_SETUP_INSTANCE_ID(input);
     
@@ -120,6 +123,7 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     surface.viewDirection = normalize(_WorldSpaceCameraPos - input.positionWS);
     surface.metallic = GetMetallic(input.baseUV);
     surface.smoothness = GetSmoothness(input.baseUV);
+    surface.fresnelStrength = GetFresnel(input.baseUV); // me07: 从材质读取 Fresnel 滑条
     // A. 法线：归一化插值后的法线
     surface.normal = normal;
     
@@ -145,7 +149,7 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     #endif
     
     // 3. 计算光照
-    GI gi = GetGI(GI_FRAGMENT_DATA(input), surface);
+    GI gi = GetGI(GI_FRAGMENT_DATA(input), surface, brdf); // me07: 传入 brdf 用于粗糙度→mip
     float3 color = GetLighting(surface, brdf, gi);
     
     //float4 finalColor = test(surface);

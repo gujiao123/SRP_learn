@@ -39,6 +39,7 @@ float GetCutoff (float2 baseUV) {
 // Unlit 没有金属度和光滑度，直接返回 0（保持接口兼容，不让 ShadowCasterPass 报错）
 float GetMetallic (float2 baseUV) { return 0.0; }
 float GetSmoothness (float2 baseUV) { return 0.0; }
+float GetFresnel (float2 baseUV) { return 0.0; } // me07: Unlit 不需要菲涅尔反射
 
 // Unlit 的自发光就是它本身的颜色！
 // 这样设计的妙处：一个 Unlit 物体参与烘焙时，烘焙大师看到的就是它的全颜色，

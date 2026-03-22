@@ -9,6 +9,7 @@ Shader "Custom RP/Lit"{
          // --- 新增 PBR 属性 ---
         _Metallic ("Metallic", Range(0, 1)) = 0
         _Smoothness ("Smoothness", Range(0, 1)) = 0.5
+        _Fresnel ("Fresnel", Range(0, 1)) = 1  // me07: 菲涅尔强度（1=完整反射边缘, 0=关闭）
         // --------------------
         //SrcBlend (源混合因子)：新画上去的颜色占多少比例？
         //DstBlend (目标混合因子)：屏幕上原本的颜色保留多少比例？
@@ -137,6 +138,9 @@ Shader "Custom RP/Lit"{
             #pragma multi_compile_instancing
             #pragma vertex ShadowCasterPassVertex
             #pragma fragment ShadowCasterPassFragment
+            
+            #pragma multi_compile _ LOD_FADE_CROSSFADE
+
             #include "ShadowCasterPass.hlsl"
             
             ENDHLSL
