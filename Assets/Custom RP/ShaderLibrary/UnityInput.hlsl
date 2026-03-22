@@ -15,15 +15,16 @@ float4x4 unity_WorldToObject;
 // 即使我们不用它，也必须占个位，否则内存对齐会错，导致闪烁
 float4 unity_LODFade; 
 float4 unity_WorldTransformParams;
-
+// me09: 每物体灯光数据（_LIGHTS_PER_OBJECT 模式需要）
+// unity_LightData.y = 影响此物体的灯光数量
+real4 unity_LightData;
+// unity_LightIndices[2] = 2×float4 = 最多8个灯光索引（每通道一个）
+real4 unity_LightIndices[2];
 
 // 这两兄弟是光照贴图的御用偏移值：
 float4 unity_LightmapST;
 // ⚠️警告：即使我们平时不用动态混合烘焙，也必须加这句占位，否则底层 SRP Batcher 合批特性会因为找不到它而崩溃报错！
 float4 unity_DynamicLightmapST;
-//me05什么意思??
-
-//me05光照探针数据??也不清楚是什么
 float4 unity_SHAr;
 float4 unity_SHAg;
 float4 unity_SHAb;

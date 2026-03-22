@@ -45,9 +45,10 @@ public partial class CameraRenderer
     /// </summary>
     /// <param name="context"></param>
     /// <param name="camera"></param>
-    public void Render(ScriptableRenderContext context, Camera camera,bool useDynamicBatching, bool useGPUInstancing, // <--- 新增参数用于动态批处理
-        ShadowSettings shadowSettings // 新增参数
-
+    public void Render(ScriptableRenderContext context, Camera camera,
+        bool useDynamicBatching, bool useGPUInstancing,
+        bool useLightsPerObject,      // me09
+        ShadowSettings shadowSettings
     )
     {
         
@@ -67,7 +68,7 @@ public partial class CameraRenderer
         buffer.BeginSample(SampleName);
         ExecuteBuffer();//提交一下 才能生效
         //将光源信息传递给GPU，在其中也会完成阴影贴图的渲染
-        lighting.Setup(context, cullingResults, shadowSettings);
+        lighting.Setup(context, cullingResults, shadowSettings, useLightsPerObject); // me09
         buffer.EndSample(SampleName);
         
         
@@ -82,7 +83,7 @@ public partial class CameraRenderer
         
         //注意是对shadertag 也就是filter来进行区别绘制
         // 传给 DrawVisibleGeometry
-        DrawVisibleGeometry(useDynamicBatching, useGPUInstancing); 
+        DrawVisibleGeometry(useDynamicBatching, useGPUInstancing, useLightsPerObject); // me09
         DrawUnsupportedShaders();
         DrawGizmos();
         
@@ -141,7 +142,7 @@ public partial class CameraRenderer
     /// 该方法首先根据当前摄像机的设置来渲染不透明物体，然后修改排序设置以渲染透明物体。
     /// 最后调用Unity内置函数绘制天空盒。
     /// </summary>
-    void DrawVisibleGeometry (bool useDynamicBatching, bool useGPUInstancing) {    
+    void DrawVisibleGeometry (bool useDynamicBatching, bool useGPUInstancing, bool useLightsPerObject) {
         
         
         
@@ -170,7 +171,11 @@ public partial class CameraRenderer
                 | PerObjectData.OcclusionProbe
                 | PerObjectData.LightProbeProxyVolume
                 | PerObjectData.OcclusionProbeProxyVolume
-                | PerObjectData.ReflectionProbes   // me07: 传递反射探针数据
+                | PerObjectData.ReflectionProbes
+                // me09: 每物体灯光索引（只在开启时才发送，否则 GPU 浪费带宽）
+                | (useLightsPerObject ?
+                    PerObjectData.LightData | PerObjectData.LightIndices :
+                    PerObjectData.None)
         };
         
         // 关键：添加第二个 Pass Name

@@ -2,55 +2,47 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-public class CustomRenderPipeline : RenderPipeline
+// me09: partial class，Editor 部分在 CustomRenderPipeline.Editor.cs 里
+public partial class CustomRenderPipeline : RenderPipeline
 {
-    // 存储开关状态
     bool useDynamicBatching, useGPUInstancing;
-    
-    
+    bool useLightsPerObject; // me09: 每物体灯光索引开关
+
     ShadowSettings shadowSettings;
 
-    // 构造函数接收参数
     public CustomRenderPipeline (
         bool useDynamicBatching, bool useGPUInstancing, bool useSRPBatcher,
-        ShadowSettings shadowSettings // 新增阴影配置参数
-
+        bool useLightsPerObject,       // me09
+        ShadowSettings shadowSettings
     ) {
-        this.useDynamicBatching = useDynamicBatching;
-        this.useGPUInstancing = useGPUInstancing;
-        
-        // 这就是开启 SRP Batcher 的全局开关
-        // 一旦开启，Unity 会尝试把所有兼容的 Shader 自动合批
+        this.useDynamicBatching  = useDynamicBatching;
+        this.useGPUInstancing    = useGPUInstancing;
+        this.useLightsPerObject  = useLightsPerObject;
+        this.shadowSettings      = shadowSettings;
+
         GraphicsSettings.useScriptableRenderPipelineBatching = useSRPBatcher;
+        GraphicsSettings.lightsUseLinearIntensity = true;
 
-        this.shadowSettings = shadowSettings;
-        
-        
-        // 必须开启，否则灯光强度不对
-        GraphicsSettings.lightsUseLinearIntensity = true; 
-        
-        
+        // me09: 初始化 Editor 专用逻辑（烘焙 Falloff Delegate）
+        InitializeForEditor();
     }
-   
-    
-    //必须重写Render函数，目前函数内部什么都不执行
-    //me 这个是老版本的不用的
-    protected override void Render(ScriptableRenderContext context, Camera[] cameras)
-    {
 
-    }
-    //!每帧调用
+    // 声明 partial 方法（Editor 版在 CustomRenderPipeline.Editor.cs 里实现）
+    partial void InitializeForEditor();
+
+    // 旧版接口保留（Unity 要求重写，但实际用下面的 List 版本）
+    protected override void Render(ScriptableRenderContext context, Camera[] cameras) { }
+
     protected override void Render (ScriptableRenderContext context, List<Camera> cameras) {
         foreach (Camera camera in cameras) {
-            // 把开关传给 Renderer
             renderer.Render(
-                context, camera, useDynamicBatching, useGPUInstancing,
-                shadowSettings // 传递设置
-
+                context, camera,
+                useDynamicBatching, useGPUInstancing,
+                useLightsPerObject, // me09
+                shadowSettings
             );
         }
     }
-    
-    
-    CameraRenderer renderer = new CameraRenderer();//创建一个CameraRenderer对象
+
+    CameraRenderer renderer = new CameraRenderer();
 }

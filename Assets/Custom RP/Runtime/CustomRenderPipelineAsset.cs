@@ -14,13 +14,15 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     // 1. 定义序列化字段 (面板开关)
     [SerializeField]
     //动态批处理(对应可见物体的gpu实例化) 和 GPU 实例化(对应可见物体的gpu实例化) 和 SRP Batcher(全局按钮)  
-    bool useDynamicBatching = true, useGPUInstancing = true, useSRPBatcher = true;
+    bool useDynamicBatching = true, useGPUInstancing = true, useSRPBatcher = true,
+         useLightsPerObject = true; // me09: 默认开启每物体灯光索引 渲染时候告诉摄像机 在range范围内就要去计算阴影烘焙的
     //重写创建实际RenderPipeline的函数
     // 2. 传给管线实例
     protected override RenderPipeline CreatePipeline () {
         return new CustomRenderPipeline(
             useDynamicBatching, useGPUInstancing, useSRPBatcher,
-            shadows // 新增参数
+            useLightsPerObject, // me09
+            shadows
         );
     }
     

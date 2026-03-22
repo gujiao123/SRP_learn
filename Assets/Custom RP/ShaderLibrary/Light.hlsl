@@ -3,19 +3,21 @@
 
 // 定义最大灯光数，必须和 C# 里的 maxDirLightCount 一致！
 #define MAX_DIRECTIONAL_LIGHT_COUNT 4
-
-// --- 这里就是创建变量的地方 ---
-// CBUFFER_START(_CustomLight) 
-// 这是一个全局 CBUFFER，所有 Shader 都能访问
-//用CBuffer包裹构造方向光源的两个属性，cpu会每帧传递（修改）这两个属性到GPU的常量缓冲区，对于一次渲染过程这两个值恒定
+#define MAX_OTHER_LIGHT_COUNT 64  // me09: 最多64盏点/聚光灯
 
 CBUFFER_START(_CustomLight)
     int _DirectionalLightCount;
     float4 _DirectionalLightColors[MAX_DIRECTIONAL_LIGHT_COUNT];
     float4 _DirectionalLightDirections[MAX_DIRECTIONAL_LIGHT_COUNT];
     float4 _DirectionalLightShadowData[MAX_DIRECTIONAL_LIGHT_COUNT];
+    // me09: Other Lights 数据（点光源 + 聚光灯共用）
+    int _OtherLightCount;
+    float4 _OtherLightColors[MAX_OTHER_LIGHT_COUNT];
+    float4 _OtherLightPositions[MAX_OTHER_LIGHT_COUNT];   // xyz=世界坐标, w=1/range²
+    float4 _OtherLightDirections[MAX_OTHER_LIGHT_COUNT];  // 聚光灯方向（点光源不用）
+    float4 _OtherLightSpotAngles[MAX_OTHER_LIGHT_COUNT];  // x=a, y=b（角度衰减参数）
+    float4 _OtherLightShadowData[MAX_OTHER_LIGHT_COUNT];  // 烘焙阴影数据
 CBUFFER_END
-// ----------------------------
 
 // 定义灯光结构体
 struct Light {
@@ -29,6 +31,10 @@ int GetDirectionalLightCount () {
     return _DirectionalLightCount;
 }
 
+// me09: 其他灯光数量（点光源 + 聚光灯）
+int GetOtherLightCount () {
+    return _OtherLightCount;
+}
 
 
 
@@ -58,14 +64,51 @@ Light GetDirectionalLight (int index, Surface surfaceWS, ShadowData shadowData)
     light.direction = _DirectionalLightDirections[index].xyz;
     //构造光源阴影信息
     DirectionalShadowData dirShadowData = GetDirectionalShadowData(index, shadowData);
-    //根据片元的强度
-    light.attenuation = GetDirectionalShadowAttenuation(dirShadowData,shadowData,surfaceWS);
-    
-    //这个是debug的模式展示级联的效果,
-    //根据级联贴图->对应阴影强度->完成 阴影效果就是影响光照强度罢了
-    //light.attenuation = shadowData.cascadeIndex * 0.25;
+    light.attenuation = GetDirectionalShadowAttenuation(dirShadowData, shadowData, surfaceWS);
     return light;
 }
 
+// me09: --- 点光源 / 聚光灯 ---
+
+// 从 _OtherLightShadowData 构造 OtherShadowData
+OtherShadowData GetOtherShadowData (int lightIndex) {
+    OtherShadowData data;
+    data.strength = _OtherLightShadowData[lightIndex].x;
+    data.shadowMaskChannel = _OtherLightShadowData[lightIndex].w;
+    return data;
+}
+
+// 获取单盏点光源/聚光灯的 Light 结构体
+Light GetOtherLight (int index, Surface surfaceWS, ShadowData shadowData) {
+    Light light;
+    light.color = _OtherLightColors[index].rgb;
+
+    // 光线方向：从片元位置 → 光源位置，再归一化
+    float3 ray = _OtherLightPositions[index].xyz - surfaceWS.position;
+    light.direction = normalize(ray);
+
+    // 距离平方衰减（平方反比定律：强度 ∝ 1/d²）
+    // max 防止除以零（极近处过亮但不会崩）
+    float distanceSqr = max(dot(ray, ray), 0.00001);
+
+    // 范围衰减：saturate(1-(d²/r²)²)²
+    // 在 Range 边缘平滑降到0，不会有硬截断边界线
+    float rangeAttenuation = Square(saturate(1.0 - Square(distanceSqr * _OtherLightPositions[index].w)));
+
+    // 聚光灯角度衰减：saturate(dot(灯方向, 光线方向) * a + b)²
+    // 点光源的 a=0, b=1 → 始终=1（无角度衰减）
+    float4 spotAngles = _OtherLightSpotAngles[index];
+    float spotAttenuation = Square(
+        saturate(dot(_OtherLightDirections[index].xyz, light.direction) * spotAngles.x + spotAngles.y)
+    );
+
+    // 烘焙阴影
+    OtherShadowData otherShadowData = GetOtherShadowData(index);
+    light.attenuation =
+        GetOtherShadowAttenuation(otherShadowData, shadowData, surfaceWS) *
+        spotAttenuation * rangeAttenuation / distanceSqr;
+
+    return light;
+}
 
 #endif

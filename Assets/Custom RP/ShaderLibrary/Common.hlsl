@@ -56,6 +56,12 @@ float DistanceSquared(float3 pA, float3 pB) {
     return dot(pA - pB, pA - pB);
 }
 
+// me09: 平方辅助函数（放在 Common 里让 Light.hlsl 也能用）
+float Square(float v) {
+    return v * v;
+}
+
+
 
 
 

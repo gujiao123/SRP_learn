@@ -124,6 +124,7 @@ Shader "Custom RP/Lit"{
             #pragma multi_compile _ _SHADOW_MASK_ALWAYS _SHADOW_MASK_DISTANCE
             //me07 LOD 变体
             #pragma multi_compile _ LOD_FADE_CROSSFADE
+            #pragma multi_compile _ _LIGHTS_PER_OBJECT // me09: 每物体灯光索引
             #pragma shader_feature _MASK_MAP    // me08: Mask Map 开关
             #pragma shader_feature _DETAIL_MAP  // me08: Detail Map 开关
             #pragma shader_feature _NORMAL_MAP  // me08: Normal Map 开关（只在主 Pass 需要）

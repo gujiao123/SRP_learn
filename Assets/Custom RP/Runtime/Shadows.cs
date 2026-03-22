@@ -139,7 +139,24 @@ public class Shadows {
         }
         return new Vector4(0f, 0f, 0f, -1f);  // 完全没有阴影，通道也是 -1
     }
-    
+
+    // me09: 点光源/聚光灯的阴影预留
+    // 本章只处理烘焙阴影（Shadow Mask），不含实时阴影
+    public Vector4 ReserveOtherShadows (Light light, int visibleLightIndex) {
+        if (light.shadows != LightShadows.None && light.shadowStrength > 0f) {
+            LightBakingOutput lightBaking = light.bakingOutput;
+            if (lightBaking.lightmapBakeType == LightmapBakeType.Mixed &&
+                lightBaking.mixedLightingMode == MixedLightingMode.Shadowmask) {
+                useShadowMask = true;
+                return new Vector4(
+                    light.shadowStrength, 0f, 0f,
+                    lightBaking.occlusionMaskChannel  // Shadow Mask 通道号
+                );
+            }
+        }
+        return new Vector4(0f, 0f, 0f, -1f);  // 无烘焙阴影
+    }
+
     // 渲染阴影的主入口
     public void Render () {
         

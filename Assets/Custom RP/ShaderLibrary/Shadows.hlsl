@@ -61,10 +61,16 @@ struct ShadowData {
 };
 
 struct DirectionalShadowData {
-    float strength;     // 灯光阴影强度（由 Light 组件设置）
-    int tileIndex;      // 对应阴影图集中的 Tile 索引
-    float normalBias;   // 法线偏移量
-    int shadowMaskChannel; // me06c：Shadow Mask 通道号（-1=无烘焙, 0=R, 1=G, 2=B, 3=A）
+    float strength;
+    int tileIndex;
+    float normalBias;
+    int shadowMaskChannel;
+};
+
+// me09: 点光源/聚光灯的阴影数据（本章只有 Shadow Mask，无实时阴影）
+struct OtherShadowData {
+    float strength;
+    int shadowMaskChannel;
 };
 
 /* --- 核心计算函数 --- */
@@ -238,6 +244,22 @@ float GetBakedShadow(ShadowMask mask, int channel, float strength) {
         return lerp(1.0, GetBakedShadow(mask, channel), strength);
     }
     return 1.0;
+}
+
+// me09: 点/聚光灯阴影衰减（放到 GetBakedShadow 后面，解决前向引用问题）
+float GetOtherShadowAttenuation (
+    OtherShadowData other, ShadowData global, Surface surfaceWS
+) {
+    #if !defined(_RECEIVE_SHADOWS)
+        return 1.0;
+    #endif
+    float shadow;
+    if (other.strength > 0.0) {
+        shadow = GetBakedShadow(global.shadowMask, other.shadowMaskChannel, other.strength);
+    } else {
+        shadow = 1.0;
+    }
+    return shadow;
 }
 
 float MixBakedAndRealtimeShadows(

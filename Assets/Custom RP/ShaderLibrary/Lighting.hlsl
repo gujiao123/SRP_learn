@@ -1,10 +1,7 @@
 #ifndef CUSTOM_LIGHTING_INCLUDED
 #define CUSTOM_LIGHTING_INCLUDED
 
-// 辅助函数：平方
-float Square (float v) {
-    return v * v;
-}
+// Square 已移到 Common.hlsl，此处不重复定义
 
 // 1. 计算入射光能量 (Lambert项)
 float3 IncomingLight (Surface surface, Light light) {
@@ -41,24 +38,39 @@ float3 GetLighting (Surface surface, BRDF brdf, Light light) {
     return IncomingLight(surface, light) * DirectBRDF(surface, brdf, light);
 }
 
-// 5. 主循环
+// 5. 主循环：方向光 + 点光源/聚光灯
 float3 GetLighting (Surface surfaceWS, BRDF brdf, GI gi) {
     ShadowData shadowData = GetShadowData(surfaceWS);
     // me06：把 GI 模块读到的烘焙遮罩数据搬运给阴影计算模块
     shadowData.shadowMask = gi.shadowMask;
     // me07: 用 IndirectBRDF 合并漫反射间接光 + 镜面环境反射
     float3 color = IndirectBRDF(surfaceWS, brdf, gi.diffuse, gi.specular);
+
+    // 方向光循环（不变）
     for (int i = 0; i < GetDirectionalLightCount(); i++) {
         Light light = GetDirectionalLight(i, surfaceWS, shadowData);
         color += GetLighting(surfaceWS, brdf, light);
     }
-    // ========= 📸 DEBUG 可视化（用哪行取消注释哪行）=========
-    //return gi.shadowMask.shadows.rrr;   // Shadow Mask R通道（第1盏灯）：黑=有阴影 白=无阴影
-    //return gi.shadowMask.shadows.ggg;   // Shadow Mask G通道（第2盏灯）
-    //return gi.shadowMask.shadows.rgba;  // Shadow Mask 全4通道彩色（RGBA=4盏灯）
-    //return gi.diffuse;                  // Lightmap间接光：彩色，代表弹射光颜色分布
-    //return float3(shadowData.shadowMask.distance, 0, 0); // 红=Distance模式已激活
-    // =========================================================
+
+    // me09: Other Lights 循环（支持每物体灯光索引优化）
+    #if defined(_LIGHTS_PER_OBJECT)
+        // 每物体灯光模式：Unity 预算好哪些灯影响这个物体（最多8盏）
+        // unity_LightData.y = 影响此物体的灯数
+        // unity_LightIndices = 最多 2×float4 = 8 个灯光索引
+        for (int j = 0; j < min(unity_LightData.y, 8); j++) {
+            // uint 除法比 int 更快（GPU 优化）
+            int lightIndex = unity_LightIndices[(uint)j / 4][(uint)j % 4];
+            Light light = GetOtherLight(lightIndex, surfaceWS, shadowData);
+            color += GetLighting(surfaceWS, brdf, light);
+        }
+    #else
+        // 标准模式：遍历所有可见 Other Lights（最多64盏）
+        for (int j = 0; j < GetOtherLightCount(); j++) {
+            Light light = GetOtherLight(j, surfaceWS, shadowData);
+            color += GetLighting(surfaceWS, brdf, light);
+        }
+    #endif
+
     return color;
 }
 
