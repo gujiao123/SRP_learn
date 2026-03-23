@@ -18,6 +18,17 @@ SAMPLER(sampler_linear_clamp);
 // 这是 Unity 的命名约定：变量名加 _TexelSize 后缀就自动填充
 float4 _PostFXSource_TexelSize;
 
+// me13: 颜色分级变量
+float4 _ColorAdjustments;  // x=曝光(倍率) y=对比度(0~2) z=色相(-1~1) w=饱和度(0~2)
+float4 _ColorFilter;       // 颜色滤镜（线性空间）
+float4 _WhiteBalance;      // LMS 系数（由 ColorBalanceToLMSCoeffs 计算）
+float4 _SplitToningShadows, _SplitToningHighlights; // 暗部/亮部色调，a通道=balance
+float4 _ChannelMixerRed, _ChannelMixerGreen, _ChannelMixerBlue; // 3×3矩阵
+float4 _SMHShadows, _SMHMidtones, _SMHHighlights, _SMHRange; // 阴影/中间调/高光
+float4 _ColorGradingLUTParameters; // 烘焙阶段:(h, 0.5/w, 0.5/h, h/(h-1)) 或 应用阶段:(1/w, 1/h, h-1)
+bool   _ColorGradingLUTInLogC;     // true时将输入读为LogC空间，支持HDR范围
+TEXTURE2D(_ColorGradingLUT);       // 2D LUT贴图（1024×32）
+
 float4 GetSourceTexelSize () {
     return _PostFXSource_TexelSize;
 }
@@ -216,32 +227,163 @@ float4 BloomScatterFinalPassFragment (Varyings input) : SV_TARGET {
     return float4(lerp(highRes, lowRes, _BloomIntensity), 1.0);
 }
 
-// me11: 简单复制（ToneMapping=None 时用）
+// me11: 简单复制
+// me13: Copy 只用于纯复制，ToneMapping=None 改用自己 Pass
 float4 CopyPassFragment (Varyings input) : SV_TARGET {
     return GetSource(input.screenUV);
 }
 
-// me12: ACES Tone Mapping — 转到 ACES 色彩空间后压缩，电影感强
-float4 ToneMappingACESPassFragment (Varyings input) : SV_TARGET {
-    float4 color = GetSource(input.screenUV);
-    color.rgb = min(color.rgb, 60.0);
-    color.rgb = AcesTonemap(unity_to_ACES(color.rgb));
-    return color;
+// ============================================================
+// me13: 颜色分级函数（每个调整一个功能）
+// ============================================================
+
+// 1. 曝光：死简单，乘上 2^postExposure
+float3 ColorGradePostExposure(float3 color) {
+    return color * _ColorAdjustments.x;
 }
 
-// me12: Neutral Tone Mapping — URP/HDRP 同款 S 形曲线，胶片感
-float4 ToneMappingNeutralPassFragment (Varyings input) : SV_TARGET {
-    float4 color = GetSource(input.screenUV);
-    color.rgb = min(color.rgb, 60.0);
-    color.rgb = NeutralTonemap(color.rgb);
-    return color;
+// 2. 白平衡：在 LMS 空间乘以系数向量
+float3 ColorGradeWhiteBalance(float3 color) {
+    color = LinearToLMS(color);
+    color *= _WhiteBalance.rgb;
+    return LMSToLinear(color);
 }
 
-// me12: Reinhard Tone Mapping — c/(c+1)，暗处几乎不变，亮处渐压向1
-float4 ToneMappingReinhardPassFragment (Varyings input) : SV_TARGET {
+// 3. 对比度：在 LogC（或 ACEScc）空间缩放
+// 在对数空间做对比度，暗部格子更密，调整时更保留暗部细节
+float3 ColorGradingContrast(float3 color, bool useACES) {
+    // ACES模式用 ACEScc，普通模式用 LogC
+    color = useACES ? ACES_to_ACEScc(unity_to_ACES(color)) : LinearToLogC(color);
+    color = (color - ACEScc_MIDGRAY) * _ColorAdjustments.y + ACEScc_MIDGRAY;
+    return useACES ? ACES_to_ACEScg(ACEScc_to_ACES(color)) : LogCToLinear(color);
+}
+
+// 4. 颜色滤镜：直接乘
+float3 ColorGradeColorFilter(float3 color) {
+    return color * _ColorFilter.rgb;
+}
+
+// 5. 分离映射：暗部/亮部分别用 SoftLight 混合色调
+// 在近似 gamma 空间操作（匹配 Adobe 产品行为）
+float Luminance(float3 color, bool useACES) {
+    return useACES ? AcesLuminance(color) : Luminance(color);
+}
+
+float3 ColorGradeSplitToning(float3 color, bool useACES) {
+    color = PositivePow(color, 1.0 / 2.2); // 转到近似 gamma 空间
+    float t = saturate(Luminance(saturate(color), useACES) + _SplitToningShadows.w);
+    float3 shadows    = lerp(0.5, _SplitToningShadows.rgb,    1.0 - t);
+    float3 highlights = lerp(0.5, _SplitToningHighlights.rgb, t);
+    color = SoftLight(color, shadows);
+    color = SoftLight(color, highlights);
+    return PositivePow(color, 2.2); // 转回线性空间
+}
+
+// 6. 通道混合：3×3矩阵乘法
+float3 ColorGradingChannelMixer(float3 color) {
+    return mul(
+        float3x3(_ChannelMixerRed.rgb, _ChannelMixerGreen.rgb, _ChannelMixerBlue.rgb),
+        color
+    );
+}
+
+// 7. 阴影/中间调/高光：根据亮度用 smoothstep 分区域
+float3 ColorGradingShadowsMidtonesHighlights(float3 color, bool useACES) {
+    float luminance = Luminance(color, useACES);
+    float shadowsWeight    = 1.0 - smoothstep(_SMHRange.x, _SMHRange.y, luminance);
+    float highlightsWeight = smoothstep(_SMHRange.z, _SMHRange.w, luminance);
+    float midtonesWeight   = 1.0 - shadowsWeight - highlightsWeight;
+    return
+        color * _SMHShadows.rgb    * shadowsWeight    +
+        color * _SMHMidtones.rgb   * midtonesWeight   +
+        color * _SMHHighlights.rgb * highlightsWeight;
+}
+
+// 8. 色相偏移：RGB→HSV→H加偏移量→HSV→RGB
+float3 ColorGradingHueShift(float3 color) {
+    color = RgbToHsv(color);
+    float hue = color.x + _ColorAdjustments.z;  // z = hueShift / 360
+    color.x = RotateHue(hue, 0.0, 1.0);
+    return HsvToRgb(color);
+}
+
+// 9. 饱和度：亮度不变，色度沿亮度方向强化/削弱
+float3 ColorGradingSaturation(float3 color, bool useACES) {
+    float luminance = Luminance(color, useACES);
+    return luminance + (color - luminance) * _ColorAdjustments.w; // w = saturation (0~2)
+}
+
+// --- 主 ColorGrade 函数：按顺序调用所有阶段 ---
+float3 ColorGrade(float3 color, bool useACES = false) {
+    color = ColorGradePostExposure(color);          // 1. 曝光
+    color = ColorGradeWhiteBalance(color);          // 2. 白平衡
+    color = ColorGradingContrast(color, useACES);  // 3. 对比度（LogC空间）
+    color = ColorGradeColorFilter(color);           // 4. 颜色滤镜
+    color = max(color, 0.0);                        //    去掉负分量
+    color = ColorGradeSplitToning(color, useACES); // 5. 分离映射
+    color = ColorGradingChannelMixer(color);        // 6. 通道混合
+    color = max(color, 0.0);
+    color = ColorGradingShadowsMidtonesHighlights(color, useACES); // 7. SMH
+    color = ColorGradingHueShift(color);            // 8. 色相
+    color = ColorGradingSaturation(color, useACES);// 9. 饱和度
+    // ACES模式：最终转回 ACES 空间，直接传给 AcesTonemap
+    return max(useACES ? ACEScg_to_ACES(color) : color, 0.0);
+}
+
+// me13: LUT 烘焙助手函数
+// UV 坐标 → 解码为颜色 → ColorGrade 返回处理后的颜色
+float3 GetColorGradedLUT(float2 uv, bool useACES = false) {
+    float3 color = GetLutStripValue(uv, _ColorGradingLUTParameters);
+    // me13: HDR模式下 LUT 坐标被解读为 LogC，覆盖 ~59 的亮度范围
+    return ColorGrade(_ColorGradingLUTInLogC ? LogCToLinear(color) : color, useACES);
+}
+
+// ============================================================
+// me13: ColorGrading Pass（成 LUT 贴图）
+// 这些 Pass 不直接读原图，而是将 UV 坐标转化成 LUT 语义的颜色
+// ============================================================
+
+// None：有 ColorGrade，无 ToneMap
+float4 ColorGradingNonePassFragment(Varyings input) : SV_TARGET {
+    float3 color = GetColorGradedLUT(input.screenUV);
+    return float4(color, 1.0);
+}
+
+// ACES：ColorGrade（ACEScc空间）+ ACES ToneMap
+float4 ColorGradingACESPassFragment(Varyings input) : SV_TARGET {
+    float3 color = GetColorGradedLUT(input.screenUV, true);
+    color = AcesTonemap(color); // 注意：输入已在 ACES 空间，不需要 unity_to_ACES
+    return float4(color, 1.0);
+}
+
+// Neutral：ColorGrade + Neutral ToneMap
+float4 ColorGradingNeutralPassFragment(Varyings input) : SV_TARGET {
+    float3 color = GetColorGradedLUT(input.screenUV);
+    color = NeutralTonemap(color);
+    return float4(color, 1.0);
+}
+
+// Reinhard：ColorGrade + Reinhard ToneMap
+float4 ColorGradingReinhardPassFragment(Varyings input) : SV_TARGET {
+    float3 color = GetColorGradedLUT(input.screenUV);
+    color /= color + 1.0;
+    return float4(color, 1.0);
+}
+
+// ============================================================
+// me13: Final Pass，把 LUT 应用到原图并写屏幕
+// ============================================================
+float3 ApplyColorGradingLUT(float3 color) {
+    return ApplyLut2D(
+        TEXTURE2D_ARGS(_ColorGradingLUT, sampler_linear_clamp),
+        saturate(_ColorGradingLUTInLogC ? LinearToLogC(color) : color),
+        _ColorGradingLUTParameters.xyz  // (1/w, 1/h, h-1)
+    );
+}
+
+float4 FinalPassFragment(Varyings input) : SV_TARGET {
     float4 color = GetSource(input.screenUV);
-    color.rgb = min(color.rgb, 60.0);
-    color.rgb /= color.rgb + 1.0;
+    color.rgb = ApplyColorGradingLUT(color.rgb);
     return color;
 }
 

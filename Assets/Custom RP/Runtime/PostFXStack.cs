@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering;
+using static PostFXSettings; // me13: 省去重复写 PostFXSettings.xxx
 
 // me11: 后处理栈 — 负责执行所有后处理效果
 // 类似 Lighting、Shadows 的结构：Setup → Render
@@ -17,32 +18,50 @@ public partial class PostFXStack
     Camera camera;
     PostFXSettings settings;
 
-    // me11: Pass 枚举（和 shader 中的 Pass 顺序一一对应）
+    // me11+13: Pass 枚举（和 shader 中的 Pass 顺序一一对应）
     enum Pass
     {
-        BloomAdd,            // me12: 加法叠加（原 BloomCombine）
+        BloomAdd,
         BloomHorizontal,
         BloomPrefilter,
-        BloomPrefilterFireflies, // me12: 萤火虫消除预过滤 shader那边的 还记得膝盖区域吗就是那个的hdr版本
-        BloomScatter,           // me12: 散射模式 Combine
-        BloomScatterFinal,      // me12: 散射模式 最终输出（补偿阈值截断损失的能量）
+        BloomPrefilterFireflies,
+        BloomScatter,
+        BloomScatterFinal,
         BloomVertical,
         Copy,
-        ToneMappingACES,     // me12: ACES Tone Mapping
-        ToneMappingNeutral,  // me12: Neutral Tone Mapping
-        ToneMappingReinhard, // me12: Reinhard Tone Mapping
-        // note：None 模式在 DoToneMapping 里直接用 Pass.Copy，这里不需要单独 Pass
+        // me13: ToneMapping* 改名为 ColorGrading*，每个 Pass 都含 ColorGrade + ToneMap
+        ColorGradingNone,     // 有ColorGrade，无ToneMap
+        ColorGradingACES,
+        ColorGradingNeutral,
+        ColorGradingReinhard,
+        Final,                // me13: 把 LUT 应用到原图并写屏幕
     }
 
     // me11: Shader 属性 ID
     int
-        bloomBucibicUpsamplingId = Shader.PropertyToID("_BloomBicubicUpsampling"),
-        bloomIntensityId = Shader.PropertyToID("_BloomIntensity"),//me12 最终的强度一句话：finalIntensity 就是传给 Shader 的"最终混合强度"，两种模式含义略不同，散射模式加了上限保护。
-        bloomPrefilterId = Shader.PropertyToID("_BloomPrefilter"),
-        bloomResultId = Shader.PropertyToID("_BloomResult"),   // me12: Bloom 输出 RT
-        bloomThresholdId = Shader.PropertyToID("_BloomThreshold"),
-        fxSourceId = Shader.PropertyToID("_PostFXSource"),
-        fxSource2Id = Shader.PropertyToID("_PostFXSource2");
+        bloomBucibicUpsamplingId    = Shader.PropertyToID("_BloomBicubicUpsampling"),
+        bloomIntensityId            = Shader.PropertyToID("_BloomIntensity"),
+        bloomPrefilterId            = Shader.PropertyToID("_BloomPrefilter"),
+        bloomResultId               = Shader.PropertyToID("_BloomResult"),
+        bloomThresholdId            = Shader.PropertyToID("_BloomThreshold"),
+        fxSourceId                  = Shader.PropertyToID("_PostFXSource"),
+        fxSource2Id                 = Shader.PropertyToID("_PostFXSource2"),
+        // me13: 颜色分级相关
+        colorAdjustmentsId          = Shader.PropertyToID("_ColorAdjustments"),
+        colorFilterId               = Shader.PropertyToID("_ColorFilter"),
+        whiteBalanceId              = Shader.PropertyToID("_WhiteBalance"),
+        splitToningShadowsId        = Shader.PropertyToID("_SplitToningShadows"),
+        splitToningHighlightsId     = Shader.PropertyToID("_SplitToningHighlights"),
+        channelMixerRedId           = Shader.PropertyToID("_ChannelMixerRed"),
+        channelMixerGreenId         = Shader.PropertyToID("_ChannelMixerGreen"),
+        channelMixerBlueId          = Shader.PropertyToID("_ChannelMixerBlue"),
+        smhShadowsId                = Shader.PropertyToID("_SMHShadows"),
+        smhMidtonesId               = Shader.PropertyToID("_SMHMidtones"),
+        smhHighlightsId             = Shader.PropertyToID("_SMHHighlights"),
+        smhRangeId                  = Shader.PropertyToID("_SMHRange"),
+        colorGradingLUTId           = Shader.PropertyToID("_ColorGradingLUT"),
+        colorGradingLUTParametersId = Shader.PropertyToID("_ColorGradingLUTParameters"),
+        colorGradingLUTInLogId      = Shader.PropertyToID("_ColorGradingLUTInLogC");
 
     // me11: Bloom 金字塔纹理 ID（最多16级，每级需要2个RT：水平+竖直）
     const int maxBloomPyramidLevels = 16;
@@ -57,23 +76,20 @@ public partial class PostFXStack
         }
     }
 
-    // me12: 是否用 HDR 格式处理 Bloom RT
-    bool useHDR;
+    bool useHDR;            // me12
+    int colorLUTResolution; // me13
 
-    // me11: 是否激活后处理
     public bool IsActive => settings != null;
 
-    // me11: 每帧初始化
     public void Setup(
         ScriptableRenderContext context, Camera camera,
-        PostFXSettings settings, bool useHDR  // me12: 加 useHDR
+        PostFXSettings settings, bool useHDR, int colorLUTResolution
     )
     {
-        this.useHDR = useHDR; // me12
+        this.useHDR = useHDR;
+        this.colorLUTResolution = colorLUTResolution; // me13
         this.context = context;
         this.camera = camera;
-        // me11: 只对 Game 和 Scene 相机启用后处理
-        // 反射探针、预览相机等不需要
         this.settings =
             camera.cameraType <= CameraType.SceneView ? settings : null;
         ApplySceneViewState();
@@ -249,31 +265,122 @@ public partial class PostFXStack
         return true;
     }
 
-    // me12: Tone Mapping — HDR 到 LDR 的非线性压缩
-    // mode < 0 (None) → 直接 Copy
-    // 其他：Pass = ToneMappingACES + (int)mode  按枚举偏移选 Pass
-    void DoToneMapping(int sourceId)
+    // me13: 颜色调整参数传给 Shader
+    // x=曝光(2^postExposure)  y=对比度(0~2)  z=色相(-1~1)  w=饱和度(0~2)
+    void ConfigureColorAdjustments()
     {
-        PostFXSettings.ToneMappingSettings.Mode mode = settings.ToneMapping.mode;
-        //选一个tonemapping的pass
-        Pass pass = mode < 0 ? Pass.Copy : Pass.ToneMappingACES + (int)mode;
-        Draw(sourceId, BuiltinRenderTextureType.CameraTarget, pass);
+        ColorAdjustmentsSettings colorAdjustments = settings.ColorAdjustments;
+        buffer.SetGlobalVector(colorAdjustmentsId, new Vector4(
+            Mathf.Pow(2f, colorAdjustments.postExposure), // stop单位→倍率
+            colorAdjustments.contrast * 0.01f + 1f,       // -100~100 → 0~2
+            colorAdjustments.hueShift * (1f / 360f),      // 度 → 0~1
+            colorAdjustments.saturation * 0.01f + 1f      // -100~100 → 0~2
+        ));
+        // 颜色滤镜转到线性空间（Inspector里显示的是 gamma）
+        buffer.SetGlobalColor(colorFilterId, colorAdjustments.colorFilter.linear);
     }
 
-    // me11+12: 渲染后处理入口（Bloom → ToneMapping 两步走）
+    // me13: 白平衡——调用 Core 库的 ColorBalanceToLMSCoeffs，在 LMS 颜色空间做矩阵乘
+    void ConfigureWhiteBalance()
+    {
+        WhiteBalanceSettings whiteBalance = settings.WhiteBalance;
+        buffer.SetGlobalVector(whiteBalanceId, ColorUtils.ColorBalanceToLMSCoeffs(
+            whiteBalance.temperature, whiteBalance.tint
+        ));
+    }
+
+    // me13: 分离映射——暗部/亮部的色调，balance 存在暗部颜色的 alpha 通道
+    void ConfigureSplitToning()
+    {
+        SplitToningSettings splitToning = settings.SplitToning;
+        Color splitColor = splitToning.shadows;
+        splitColor.a = splitToning.balance * 0.01f;  // -100~100 → -1~1
+        buffer.SetGlobalColor(splitToningShadowsId, splitColor);    // gamma 空间直接传
+        buffer.SetGlobalColor(splitToningHighlightsId, splitToning.highlights);
+    }
+
+    // me13: 通道混合——三个向量就是 3×3 矩阵的三行
+    void ConfigureChannelMixer()
+    {
+        ChannelMixerSettings channelMixer = settings.ChannelMixer;
+        buffer.SetGlobalVector(channelMixerRedId,   channelMixer.red);
+        buffer.SetGlobalVector(channelMixerGreenId, channelMixer.green);
+        buffer.SetGlobalVector(channelMixerBlueId,  channelMixer.blue);
+    }
+
+    // me13: 阴影/中间调/高光——三色转线性空间，区域范围打包成一个 Vector4
+    void ConfigureShadowsMidtonesHighlights()
+    {
+        ShadowsMidtonesHighlightsSettings smh = settings.ShadowsMidtonesHighlights;
+        buffer.SetGlobalColor(smhShadowsId,    smh.shadows.linear);
+        buffer.SetGlobalColor(smhMidtonesId,   smh.midtones.linear);
+        buffer.SetGlobalColor(smhHighlightsId, smh.highlights.linear);
+        buffer.SetGlobalVector(smhRangeId, new Vector4(
+            smh.shadowsStart, smh.shadowsEnd,
+            smh.highlightsStart, smh.highLightsEnd
+        ));
+    }
+
+    // me12→13: Tone Mapping 改名为 DoColorGradingAndToneMapping，和 ColorGrade 合并
+    // 流程: Configure参数 → 生成 LUT → 应用 LUT 到原图 → 写屏幕
+    void DoColorGradingAndToneMapping(int sourceId)
+    {
+        // 把所有颜色调整参数传给 Shader
+        ConfigureColorAdjustments();
+        ConfigureWhiteBalance();
+        ConfigureSplitToning();
+        ConfigureChannelMixer();
+        ConfigureShadowsMidtonesHighlights();
+
+        // me13: 根据 ToneMapping 模式选择 Pass
+        // Mode 枚举从0开始: None=0, ACES=1, Neutral=2, Reinhard=3
+        ToneMappingSettings.Mode mode = settings.ToneMapping.mode;
+        Pass pass = Pass.ColorGradingNone + (int)mode;
+
+        // me13: 刻度 LUT 纹理（宽2D贴图模拟 3D LUT）
+        int lutHeight = colorLUTResolution;     // 32
+        int lutWidth  = lutHeight * lutHeight;  // 32×32 = 1024
+        buffer.GetTemporaryRT(
+            colorGradingLUTId, lutWidth, lutHeight, 0,
+            FilterMode.Bilinear, RenderTextureFormat.DefaultHDR
+        );
+        // 烘焙阶段的参数
+        buffer.SetGlobalVector(colorGradingLUTParametersId, new Vector4(
+            lutHeight,
+            0.5f / lutWidth,
+            0.5f / lutHeight,
+            lutHeight / (lutHeight - 1f)
+        ));
+        // me13: HDR + 有ToneMap 时用 LogC 模式，扩展到 ~59 左右的亮度范围
+        buffer.SetGlobalFloat(
+            colorGradingLUTInLogId,
+            useHDR && pass != Pass.ColorGradingNone ? 1f : 0f
+        );
+        // 渲染 LUT（写入 colorGradingLUTId）
+        Draw(sourceId, colorGradingLUTId, pass);
+
+        // 应用 LUT 阶段的参数（不同，只有 3 个分量有用）
+        buffer.SetGlobalVector(colorGradingLUTParametersId, new Vector4(
+            1f / lutWidth, 1f / lutHeight, lutHeight - 1f
+        ));
+        // Final Pass：把 LUT 应用到原图，写屏幕
+        Draw(sourceId, BuiltinRenderTextureType.CameraTarget, Pass.Final);
+        buffer.ReleaseTemporaryRT(colorGradingLUTId);
+    }
+
+    // me11+12+13: 渲染后处理入口
     public void Render(int sourceId)
     {
         if (DoBloom(sourceId))
         {
-            //me12就是等bloom画完了 存储到hdr模式的贴图里面然后再对这个贴图进行tonemapping 所以要等bloom
-            // 有 Bloom 结果：对 bloomResult 做 ToneMapping 再写屏幕
-            DoToneMapping(bloomResultId);
+            // 有 Bloom：对 bloom 结果做颜色分级
+            DoColorGradingAndToneMapping(bloomResultId);
             buffer.ReleaseTemporaryRT(bloomResultId);
         }
         else
         {
-            // 无 Bloom：对原图直接做 ToneMapping
-            DoToneMapping(sourceId);
+            // 无 Bloom：直接对原图做颜色分级
+            DoColorGradingAndToneMapping(sourceId);
         }
         context.ExecuteCommandBuffer(buffer);
         buffer.Clear();

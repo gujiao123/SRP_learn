@@ -57,9 +57,10 @@ public partial class CameraRenderer
     public void Render(ScriptableRenderContext context, Camera camera,
         bool allowHDR,                 // me12
         bool useDynamicBatching, bool useGPUInstancing,
-        bool useLightsPerObject,      // me09
+        bool useLightsPerObject,       // me09
         ShadowSettings shadowSettings,
-        PostFXSettings postFXSettings  // me11
+        PostFXSettings postFXSettings, // me11
+        int colorLUTResolution         // me13
     )
     {
 
@@ -83,8 +84,8 @@ public partial class CameraRenderer
         ExecuteBuffer();//提交一下 才能生效
         //将光源信息传递给GPU，在其中也会完成阴影贴图的渲染
         lighting.Setup(context, cullingResults, shadowSettings, useLightsPerObject); // me09
-        // me11: 初始化后处理栈，me12: 多传 useHDR
-        postFXStack.Setup(context, camera, postFXSettings, useHDR);
+        // me11+13: 初始化后处理栈
+        postFXStack.Setup(context, camera, postFXSettings, useHDR, colorLUTResolution);
         buffer.EndSample(SampleName);
 
 

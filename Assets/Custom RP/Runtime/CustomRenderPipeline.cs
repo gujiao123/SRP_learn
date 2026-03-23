@@ -8,7 +8,8 @@ public partial class CustomRenderPipeline : RenderPipeline
     // 存储开关状态
     bool useDynamicBatching, useGPUInstancing;
     bool useLightsPerObject;
-    bool allowHDR; // me12
+    bool allowHDR;           // me12
+    int colorLUTResolution;  // me13: LUT 分辨率（16/32/64）
 
     ShadowSettings shadowSettings;
     PostFXSettings postFXSettings; // me11
@@ -19,15 +20,17 @@ public partial class CustomRenderPipeline : RenderPipeline
         bool useDynamicBatching, bool useGPUInstancing, bool useSRPBatcher,
         bool useLightsPerObject,       // me09
         ShadowSettings shadowSettings,
-        PostFXSettings postFXSettings  // me11
+        PostFXSettings postFXSettings, // me11
+        int colorLUTResolution         // me13
     )
     {
-        this.allowHDR = allowHDR;  // me12
+        this.allowHDR = allowHDR;
+        this.colorLUTResolution = colorLUTResolution; // me13
         this.useDynamicBatching = useDynamicBatching;
         this.useGPUInstancing = useGPUInstancing;
         this.useLightsPerObject = useLightsPerObject;
         this.shadowSettings = shadowSettings;
-        this.postFXSettings = postFXSettings; // me11
+        this.postFXSettings = postFXSettings;
 
         GraphicsSettings.useScriptableRenderPipelineBatching = useSRPBatcher;
         GraphicsSettings.lightsUseLinearIntensity = true;
@@ -49,11 +52,12 @@ public partial class CustomRenderPipeline : RenderPipeline
             // 把开关传给 Renderer
             renderer.Render(
                 context, camera,
-                allowHDR,           // me12
+                allowHDR,            // me12
                 useDynamicBatching, useGPUInstancing,
-                useLightsPerObject, // me09
+                useLightsPerObject,  // me09
                 shadowSettings,
-                postFXSettings      // me11
+                postFXSettings,      // me11
+                colorLUTResolution   // me13
             );
         }
     }

@@ -14,6 +14,12 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     [SerializeField]
     bool allowHDR = true;
 
+    // me13: Color LUT 分辨率（16/32/64，越大精度越高但内存越大）
+    // 32 是默认值，通常足够，banding明显时再用 64
+    public enum ColorLUTResolution { _16 = 16, _32 = 32, _64 = 64 }
+    [SerializeField]
+    ColorLUTResolution colorLUTResolution = ColorLUTResolution._32;
+
     // me11: 后处理设置
     [SerializeField]
     PostFXSettings postFXSettings = default;
@@ -29,11 +35,12 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     protected override RenderPipeline CreatePipeline()
     {
         return new CustomRenderPipeline(
-            allowHDR,               // me12：透传给管线，再透传给 CameraRenderer
+            allowHDR,               // me12
             useDynamicBatching, useGPUInstancing, useSRPBatcher,
-            useLightsPerObject, // me09
+            useLightsPerObject,     // me09
             shadows,
-            postFXSettings      // me11
+            postFXSettings,         // me11
+            (int)colorLUTResolution // me13: LUT分辨率转为 int（16/32/64）
         );
     }
 

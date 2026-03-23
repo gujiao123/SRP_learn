@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 // me11: 后处理设置资源（ScriptableObject）
@@ -80,9 +81,13 @@ public class PostFXSettings : ScriptableObject
     [System.Serializable]
     public struct ToneMappingSettings
     {
-        // me12: None=-1 使得 ACES=0，Pass 枚举用 offset 计算：
-        //   Pass = ToneMappingACES + (int)mode
-        public enum Mode { None = -1, ACES, Neutral, Reinhard }
+        // me13: None 改为从0开始（有了自己的 ColorGradingNone Pass，不再用 Copy 代替）
+        // Pass = ColorGradingNone + (int)mode
+        //   None=0 → ColorGradingNone（有ColorGrade，无ToneMap）
+        //   ACES=1 → ColorGradingACES
+        //   Neutral=2 → ColorGradingNeutral
+        //   Reinhard=3 → ColorGradingReinhard
+        public enum Mode { None, ACES, Neutral, Reinhard }
         public Mode mode;
     }
 
@@ -90,4 +95,123 @@ public class PostFXSettings : ScriptableObject
     ToneMappingSettings toneMapping = default;
 
     public ToneMappingSettings ToneMapping => toneMapping;
+
+    // me13: 颜色调整（对应 URP/HDRP 的 Color Adjustments 工具）
+    [Serializable]
+    public struct ColorAdjustmentsSettings
+    {
+        public float postExposure;        // 曝光（stop单位，2^x 传给Shader）
+
+        [Range(-100f, 100f)]
+        public float contrast;            // 对比度（在LogC空间操作）
+
+        [ColorUsage(false, true)]         // HDR颜色，无alpha
+        public Color colorFilter;         // 颜色滤镜（直接乘）
+
+        [Range(-180f, 180f)]
+        public float hueShift;            // 色相旋转（RGB→HSV→H偏移→RGB）
+
+        [Range(-100f, 100f)]
+        public float saturation;          // 饱和度
+    }
+
+    [SerializeField]
+    ColorAdjustmentsSettings colorAdjustments = new ColorAdjustmentsSettings
+    {
+        colorFilter = Color.white  // 默认白色滤镜 = 不改变颜色
+    };
+
+    public ColorAdjustmentsSettings ColorAdjustments => colorAdjustments;
+
+    // me13: 白平衡（在 LMS 颜色空间调整，模拟人眼感知）
+    [Serializable]
+    public struct WhiteBalanceSettings
+    {
+        [Range(-100f, 100f)]
+        public float temperature;  // 色温（负=冷蓝，正=暖黄）
+
+        [Range(-100f, 100f)]
+        public float tint;         // 色彩偏移（负=偏绿，正=偏洋红）
+    }
+
+    [SerializeField]
+    WhiteBalanceSettings whiteBalance = default;
+
+    public WhiteBalanceSettings WhiteBalance => whiteBalance;
+
+    // me13: 分离映射（暗部/亮部分别染色，经典电影色调：暗蓝亮橙）
+    [Serializable]
+    public struct SplitToningSettings
+    {
+        [ColorUsage(false)]  // LDR颜色，无alpha
+        public Color shadows;    // 暗部色调
+
+        [ColorUsage(false)]
+        public Color highlights; // 亮部色调
+
+        [Range(-100f, 100f)]
+        public float balance;    // 平衡点（负=暗部范围更大，正=亮部范围更大）
+    }
+
+    [SerializeField]
+    SplitToningSettings splitToning = new SplitToningSettings
+    {
+        shadows = Color.gray,     // 默认灰色 = 不染色
+        highlights = Color.gray
+    };
+
+    public SplitToningSettings SplitToning => splitToning;
+
+    // me13: 通道混合（3×3矩阵，R/G/B输入自由组合成新RGB）
+    [Serializable]
+    public struct ChannelMixerSettings
+    {
+        public Vector3 red;    // 新R = dot(原RGB, red)
+        public Vector3 green;  // 新G = dot(原RGB, green)
+        public Vector3 blue;   // 新B = dot(原RGB, blue)
+    }
+
+    [SerializeField]
+    ChannelMixerSettings channelMixer = new ChannelMixerSettings
+    {
+        red = Vector3.right,   // (1,0,0) 默认单位矩阵
+        green = Vector3.up,      // (0,1,0)
+        blue = Vector3.forward  // (0,0,1)
+    };
+
+    public ChannelMixerSettings ChannelMixer => channelMixer;
+
+    // me13: 阴影/中间调/高光（按亮度分区域染色，可配置区域边界）
+    [Serializable]
+    public struct ShadowsMidtonesHighlightsSettings
+    {
+        [ColorUsage(false, true)]
+        public Color shadows;    // 暗部颜色（白=不变）
+
+        [ColorUsage(false, true)]
+        public Color midtones;   // 中间调颜色
+
+        [ColorUsage(false, true)]
+        public Color highlights; // 亮部颜色
+
+        [Range(0f, 2f)] public float shadowsStart;    // 暗部区域起点
+        [Range(0f, 2f)] public float shadowsEnd;      // 暗部区域终点
+        [Range(0f, 2f)] public float highlightsStart; // 亮部区域起点
+        [Range(0f, 2f)] public float highLightsEnd;   // 亮部区域终点
+    }
+
+    [SerializeField]
+    ShadowsMidtonesHighlightsSettings shadowsMidtonesHighlights =
+        new ShadowsMidtonesHighlightsSettings
+        {
+            shadows = Color.white,
+            midtones = Color.white,
+            highlights = Color.white,
+            shadowsEnd = 0.3f,   // 和 Unity 默认值一致
+            highlightsStart = 0.55f,
+            highLightsEnd = 1f
+        };
+
+    public ShadowsMidtonesHighlightsSettings ShadowsMidtonesHighlights =>
+        shadowsMidtonesHighlights;
 }
