@@ -1,10 +1,8 @@
 using System;
-using UnityEngine;
-using UnityEngine.Rendering;
-
-
 using UnityEditor;
+using UnityEngine;
 using UnityEngine.Profiling;
+using UnityEngine.Rendering;
 
 
 //G partial 关键字允许将类、结构体或接口的定义分散在多个文件中。
@@ -20,14 +18,14 @@ public partial class CameraRenderer
     partial void PrepareBuffer();
     //定义分部函数的方式类似C++ 控制发行版本 和 编辑器版本的代码
     partial void DrawUnsupportedShaders();//这个在scene没有影响,在game中有影响
-    
-    
+
+
 
     //这块代码只会在Editor下起作用
     //也就是说runtime的时候 不会渲染下面错误tag  等等
 #if UNITY_EDITOR
     string SampleName { get; set; }
-    
+
     /// <summary>
     /// 设置每个camera将要debbug采样点的名称 相机名称即为采样点名称
     /// </summary>
@@ -41,9 +39,9 @@ public partial class CameraRenderer
         buffer.name = SampleName = camera.name;
         Profiler.EndSample();
     }
-    
 
-    
+
+
     //获取Unity默认的shader tag id 
     //me 为了让我们的管线能识别Unity内置的shader 并进行渲染
     private static ShaderTagId[] legacyShaderTagIds =
@@ -80,13 +78,13 @@ public partial class CameraRenderer
         {
             drawingSettings.SetShaderPassName(i, legacyShaderTagIds[i]);
         }
-        
+
         var filteringSettings = FilteringSettings.defaultValue;
         context.DrawRenderers(cullingResults, ref drawingSettings, ref filteringSettings);
     }
-    
+
     // me11: PreImageEffects — 这些 Gizmos 会受后处理影响
-    partial void DrawGizmosBeforeFX ()
+    partial void DrawGizmosBeforeFX()
     {
         if (Handles.ShouldRenderGizmos())
         {
@@ -95,14 +93,14 @@ public partial class CameraRenderer
     }
 
     // me11: PostImageEffects — 这些 Gizmos 保持清晰，不受后处理影响
-    partial void DrawGizmosAfterFX ()
+    partial void DrawGizmosAfterFX()
     {
         if (Handles.ShouldRenderGizmos())
         {
             context.DrawGizmos(camera, GizmoSubset.PostImageEffects);
         }
     }
-    
+
     /// <summary>
     /// 绘制UI 这个比较特殊 在editor模式下要显式告诉渲染管线
     /// </summary>
@@ -113,7 +111,7 @@ public partial class CameraRenderer
             ScriptableRenderContext.EmitWorldGeometryForSceneView(camera);
         }
     }
-    
+
 #else
     // 正式版：直接用常量，省电省内存
 	const string SampleName = bufferName;

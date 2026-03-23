@@ -20,21 +20,29 @@ public partial class PostFXStack
     // me11: Pass 枚举（和 shader 中的 Pass 顺序一一对应）
     enum Pass
     {
+        BloomAdd,            // me12: 加法叠加（原 BloomCombine）
         BloomHorizontal,
-        BloomVertical,
-        BloomCombine,
         BloomPrefilter,
-        Copy
+        BloomPrefilterFireflies, // me12: 萤火虫消除预过滤 shader那边的 还记得膝盖区域吗就是那个的hdr版本
+        BloomScatter,           // me12: 散射模式 Combine
+        BloomScatterFinal,      // me12: 散射模式 最终输出（补偿阈值截断损失的能量）
+        BloomVertical,
+        Copy,
+        ToneMappingACES,     // me12: ACES Tone Mapping
+        ToneMappingNeutral,  // me12: Neutral Tone Mapping
+        ToneMappingReinhard, // me12: Reinhard Tone Mapping
+        // note：None 模式在 DoToneMapping 里直接用 Pass.Copy，这里不需要单独 Pass
     }
 
     // me11: Shader 属性 ID
     int
-        bloomBucibicUpsamplingId = Shader.PropertyToID("_BloomBicubicUpsampling"),//设置是否用双三次插值
-        bloomIntensityId = Shader.PropertyToID("_BloomIntensity"),//设置光照强度
-        bloomPrefilterId = Shader.PropertyToID("_BloomPrefilter"),//设置预过滤
-        bloomThresholdId = Shader.PropertyToID("_BloomThreshold"),//设置阈值
-        fxSourceId = Shader.PropertyToID("_PostFXSource"),//设置源图
-        fxSource2Id = Shader.PropertyToID("_PostFXSource2");//叠加用的第二张图（Combine 时）
+        bloomBucibicUpsamplingId = Shader.PropertyToID("_BloomBicubicUpsampling"),
+        bloomIntensityId = Shader.PropertyToID("_BloomIntensity"),//me12 最终的强度一句话：finalIntensity 就是传给 Shader 的"最终混合强度"，两种模式含义略不同，散射模式加了上限保护。
+        bloomPrefilterId = Shader.PropertyToID("_BloomPrefilter"),
+        bloomResultId = Shader.PropertyToID("_BloomResult"),   // me12: Bloom 输出 RT
+        bloomThresholdId = Shader.PropertyToID("_BloomThreshold"),
+        fxSourceId = Shader.PropertyToID("_PostFXSource"),
+        fxSource2Id = Shader.PropertyToID("_PostFXSource2");
 
     // me11: Bloom 金字塔纹理 ID（最多16级，每级需要2个RT：水平+竖直）
     const int maxBloomPyramidLevels = 16;
@@ -49,15 +57,19 @@ public partial class PostFXStack
         }
     }
 
-    // me11: 是否激活后处理（没设置 settings 就跳过）
+    // me12: 是否用 HDR 格式处理 Bloom RT
+    bool useHDR;
+
+    // me11: 是否激活后处理
     public bool IsActive => settings != null;
 
     // me11: 每帧初始化
     public void Setup(
         ScriptableRenderContext context, Camera camera,
-        PostFXSettings settings
+        PostFXSettings settings, bool useHDR  // me12: 加 useHDR
     )
     {
+        this.useHDR = useHDR; // me12
         this.context = context;
         this.camera = camera;
         // me11: 只对 Game 和 Scene 相机启用后处理
@@ -67,14 +79,6 @@ public partial class PostFXStack
         ApplySceneViewState();
     }
 
-    // me11: 渲染后处理入口
-    //me11以后后处理都在这里加
-    public void Render(int sourceId)
-    {
-        DoBloom(sourceId); // ① 把所有 Bloom 命令录进 buffer
-        context.ExecuteCommandBuffer(buffer);  // ② 把 buffer 交给 context 收集
-        buffer.Clear(); // ③ 清空 buffer，准备下一帧
-    }
 
     // me11: 自定义全屏绘制（用程序化三角形代替 Blit 的四边形）
     // 3个顶点的三角形覆盖整个屏幕，比四边形少一个三角形
@@ -99,28 +103,26 @@ public partial class PostFXStack
         );
     }
 
-    // me11: Bloom 效果
-    // 降采样金字塔：原图 → 半分辨率 → 四分之一 → ... 每级做高斯模糊
-    // 升采样叠加：从最小层往回走，每级和上一级叠加
-    void DoBloom(int sourceId)
+    // me11+12: Bloom效果（me12: 返回 bool 告知 Render 是否有结果，输出到 bloomResultId）
+    bool DoBloom(int sourceId)
     {
-        buffer.BeginSample("Bloom");
         PostFXSettings.BloomSettings bloom = settings.Bloom;
         int width = camera.pixelWidth / 2, height = camera.pixelHeight / 2;
 
-        // me11: 如果 Bloom 被禁用或源图太小，直接 Copy
+        // me11: 如果 Bloom 被禁用或源图太小，直接返回 false
+        // me12: BeginSample 移到这里之后，Bloom 禁用时不产生空的 Sample 块
         if (
             bloom.maxIterations == 0 || bloom.intensity <= 0f ||
             height < bloom.downscaleLimit * 2 ||
             width < bloom.downscaleLimit * 2
         )
         {
-            Draw(sourceId, BuiltinRenderTextureType.CameraTarget, Pass.Copy);
-            buffer.EndSample("Bloom");
-            return;
+            return false;
         }
 
-        RenderTextureFormat format = RenderTextureFormat.Default;
+        buffer.BeginSample("Bloom"); // 确认有 Bloom 才开始计时
+        RenderTextureFormat format =
+            useHDR ? RenderTextureFormat.DefaultHDR : RenderTextureFormat.Default;
 
         // me11: 阈值参数预计算（减少 Shader 里的计算量）
         Vector4 threshold;
@@ -139,11 +141,10 @@ public partial class PostFXStack
         buffer.SetGlobalVector(bloomThresholdId, threshold);
 
         // me11: 先做一次预过滤（应用阈值 + 半分辨率）
-        buffer.GetTemporaryRT(
-            bloomPrefilterId, width, height, 0,
-            FilterMode.Bilinear, format
-        );
-        Draw(sourceId, bloomPrefilterId, Pass.BloomPrefilter);
+        buffer.GetTemporaryRT(bloomPrefilterId, width, height, 0, FilterMode.Bilinear, format);
+        // me12: fadeFireflies 开启时用萤火虫消除 Pass
+        Draw(sourceId, bloomPrefilterId,
+            bloom.fadeFireflies ? Pass.BloomPrefilterFireflies : Pass.BloomPrefilter);
         width /= 2;
         height /= 2;
 
@@ -185,10 +186,24 @@ public partial class PostFXStack
 
         buffer.ReleaseTemporaryRT(bloomPrefilterId);
 
-        // me11: 升采样循环（从最小层往回走，叠加每一级）
-        buffer.SetGlobalFloat(
-            bloomBucibicUpsamplingId, bloom.bicubicUpsampling ? 1f : 0f
-        );
+        buffer.SetGlobalFloat(bloomBucibicUpsamplingId, bloom.bicubicUpsampling ? 1f : 0f);
+
+        // me12: 根据模式选择 Combine Pass
+        Pass combinePass, finalPass;
+        float finalIntensity;
+        if (bloom.mode == PostFXSettings.BloomSettings.Mode.Additive)
+        {
+            combinePass = finalPass = Pass.BloomAdd;
+            buffer.SetGlobalFloat(bloomIntensityId, 1f);
+            finalIntensity = bloom.intensity;
+        }
+        else
+        {
+            combinePass = Pass.BloomScatter;
+            finalPass = Pass.BloomScatterFinal;
+            buffer.SetGlobalFloat(bloomIntensityId, bloom.scatter);
+            finalIntensity = Mathf.Min(bloom.intensity, 0.95f);
+        }
         if (i > 1)
         {
             //me11就是释放对应横向保存的mid可以释放 
@@ -206,8 +221,8 @@ public partial class PostFXStack
             for (i -= 1; i > 0; i--)//从最小层往回走，叠加每一级
             {
                 //指向上面一层toId + 1 是降采样时产物里更清晰的那层（纵向结果）
-                buffer.SetGlobalTexture(fxSource2Id, toId + 1); // source2 = 上一层（较大的）
-                Draw(fromId, toId, Pass.BloomCombine);  // fromId(当前小图) → toId(上一层大小)
+                buffer.SetGlobalTexture(fxSource2Id, toId + 1);
+                Draw(fromId, toId, combinePass); // me12: 用选好的 combinePass
                 buffer.ReleaseTemporaryRT(fromId);// 用完，释放 最小的纵层释放
                 buffer.ReleaseTemporaryRT(toId + 1);  // 上一层原内容用完，释放
                 fromId = toId; // 下一轮的输入 = 刚合并的结果
@@ -219,17 +234,50 @@ public partial class PostFXStack
             buffer.ReleaseTemporaryRT(bloomPyramidId);
         }
 
-        // me11: 最后一次叠加，把 Bloom 结果和原图合并输出到屏幕
-        buffer.SetGlobalFloat(bloomIntensityId, bloom.intensity);
+        // me12: 最终输出到 bloomResultId，不直接写屏幕（让 ToneMapping 去写）
+
+
+        buffer.SetGlobalFloat(bloomIntensityId, finalIntensity);
         buffer.SetGlobalTexture(fxSource2Id, sourceId);
-        Draw(
-            fromId, BuiltinRenderTextureType.CameraTarget,
-            Pass.BloomCombine
+        buffer.GetTemporaryRT(
+            bloomResultId, camera.pixelWidth, camera.pixelHeight,
+            0, FilterMode.Bilinear, format
         );
+        Draw(fromId, bloomResultId, finalPass);
         buffer.ReleaseTemporaryRT(fromId);
         buffer.EndSample("Bloom");
+        return true;
     }
 
-    // me11: 分部方法声明（Editor 版本在 PostFXStack.Editor.cs 里实现）
+    // me12: Tone Mapping — HDR 到 LDR 的非线性压缩
+    // mode < 0 (None) → 直接 Copy
+    // 其他：Pass = ToneMappingACES + (int)mode  按枚举偏移选 Pass
+    void DoToneMapping(int sourceId)
+    {
+        PostFXSettings.ToneMappingSettings.Mode mode = settings.ToneMapping.mode;
+        //选一个tonemapping的pass
+        Pass pass = mode < 0 ? Pass.Copy : Pass.ToneMappingACES + (int)mode;
+        Draw(sourceId, BuiltinRenderTextureType.CameraTarget, pass);
+    }
+
+    // me11+12: 渲染后处理入口（Bloom → ToneMapping 两步走）
+    public void Render(int sourceId)
+    {
+        if (DoBloom(sourceId))
+        {
+            //me12就是等bloom画完了 存储到hdr模式的贴图里面然后再对这个贴图进行tonemapping 所以要等bloom
+            // 有 Bloom 结果：对 bloomResult 做 ToneMapping 再写屏幕
+            DoToneMapping(bloomResultId);
+            buffer.ReleaseTemporaryRT(bloomResultId);
+        }
+        else
+        {
+            // 无 Bloom：对原图直接做 ToneMapping
+            DoToneMapping(sourceId);
+        }
+        context.ExecuteCommandBuffer(buffer);
+        buffer.Clear();
+    }
+
     partial void ApplySceneViewState();
 }

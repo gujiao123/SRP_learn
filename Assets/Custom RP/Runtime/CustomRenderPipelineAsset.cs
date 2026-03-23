@@ -10,6 +10,10 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     [SerializeField]
     ShadowSettings shadows = default;
 
+    // me12: 允许 HDR 渲染（项目级总开关，还需相机自身 allowHDR=true 才生效）
+    [SerializeField]
+    bool allowHDR = true;
+
     // me11: 后处理设置
     [SerializeField]
     PostFXSettings postFXSettings = default;
@@ -22,8 +26,10 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
          useLightsPerObject = true; // me09: 默认开启每物体灯光索引 渲染时候告诉摄像机 在range范围内就要去计算阴影烘焙的
     //重写创建实际RenderPipeline的函数
     // 2. 传给管线实例
-    protected override RenderPipeline CreatePipeline () {
+    protected override RenderPipeline CreatePipeline()
+    {
         return new CustomRenderPipeline(
+            allowHDR,               // me12：透传给管线，再透传给 CameraRenderer
             useDynamicBatching, useGPUInstancing, useSRPBatcher,
             useLightsPerObject, // me09
             shadows,
@@ -31,8 +37,8 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
         );
     }
 
-    
-}   
+
+}
 
 
 

@@ -5,6 +5,8 @@
 #define CUSTOM_POST_FX_PASSES_INCLUDED
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Filtering.hlsl"
+// me12: Color.hlsl 提供 Luminance, NeutralTonemap, AcesTonemap, unity_to_ACES
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
 
 // me11: 源纹理（当前帧画面）和第二源（用于 Bloom 合并）
 TEXTURE2D(_PostFXSource);
@@ -127,14 +129,11 @@ float4 BloomVerticalPassFragment (Varyings input) : SV_TARGET {
     return float4(color, 1.0);
 }
 
-// me11: Bloom 合并（升采样 + 叠加原图/上层）
-// lowRes = 当前层的 Bloom（可选 bicubic 升采样）
-// highRes = 上一层（更清晰）的图像
-// 最后一次合并时 intensity 控制 Bloom 整体强度
+// me11->me12: Bloom 加法叠加（原 BloomCombine，改名 BloomAdd 区分散射 Pass）
 bool _BloomBicubicUpsampling;
 float _BloomIntensity;
 
-float4 BloomCombinePassFragment (Varyings input) : SV_TARGET {
+float4 BloomAddPassFragment (Varyings input) : SV_TARGET {
     float3 lowRes;
     if (_BloomBicubicUpsampling) {
         lowRes = GetSourceBicubic(input.screenUV).rgb;
@@ -152,9 +151,98 @@ float4 BloomPrefilterPassFragment (Varyings input) : SV_TARGET {
     return float4(color, 1.0);
 }
 
-// me11: 简单复制（无后处理时直接 Copy 到屏幕）
+// me12: 萤火虫消除预过滤
+// 采样对角5点，按 weight=1/(luminance+1) 加权平均
+// 极亮像素权重极低，被周围暗像素稀释，Bloom 光晕不再闪烁
+// 读取原图写入半分辨率RT
+float4 BloomPrefilterFirefliesPassFragment (Varyings input) : SV_TARGET {
+    float3 color = 0.0;
+    float weightSum = 0.0;
+    float2 offsets[] = {
+        float2( 0.0,  0.0),   // 中心
+        float2(-1.0, -1.0),   // 左下 斜对角
+        float2(-1.0,  1.0),   // 左上 斜对角
+        float2( 1.0, -1.0),   // 右下 斜对角
+        float2( 1.0,  1.0)    // 右上 斜对角
+    };
+    for (int i = 0; i < 5; i++) {
+        float3 c = GetSource(
+            //me12: GetSourceTexelSize这个是原图的 你想想 是不是该扩大一下 2倍 毕竟这里是读取原图的点对于原图采样
+            input.screenUV + offsets[i] * GetSourceTexelSize().xy * 2.0
+        ).rgb;
+//         如果不先过滤：
+//   暗区像素（亮度0.1）也参与加权，影响权重分布
+//   但暗区像素本来就应该被阈值截掉，不参与Bloom
+// 先过滤：
+//   阈值以下的像素 c = 0 → Luminance(0) = 0 → w = 1/(0+1) = 1
+//   但 c = 0，贡献的颜色也是 0
+//   所以它们不影响最终颜色，只影响权重分母（变大 → 结果更小）
+//   实际上是让输出更靠近0，进一步抑制了光晕
+        c = ApplyBloomThreshold(c); // 先过滤阈值以下的颜色
+        //这是"反亮度权重"，越亮权重越小：
+        float w = 1.0 / (Luminance(c) + 1.0);
+        color += c * w;
+        weightSum += w;
+    }
+    color /= weightSum;
+    return float4(color, 1.0);
+}
+
+// me12: Bloom 散射合并（能量守恒）lerp(highRes, lowRes, scatter)
+float4 BloomScatterPassFragment (Varyings input) : SV_TARGET {
+    float3 lowRes;
+    if (_BloomBicubicUpsampling) {
+        lowRes = GetSourceBicubic(input.screenUV).rgb;
+    }
+    else {
+        lowRes = GetSource(input.screenUV).rgb;
+    }
+    float3 highRes = GetSource2(input.screenUV).rgb;
+    return float4(lerp(highRes, lowRes, _BloomIntensity), 1.0);
+}
+
+// me12: Bloom 散射最终输出（补偿阈值截断损失的能量）
+// lowRes += highRes - threshold(highRes)  把被截断的暗部直接加回来
+float4 BloomScatterFinalPassFragment (Varyings input) : SV_TARGET {
+    float3 lowRes;
+    if (_BloomBicubicUpsampling) {
+        lowRes = GetSourceBicubic(input.screenUV).rgb;
+    }
+    else {
+        lowRes = GetSource(input.screenUV).rgb;
+    }
+    float3 highRes = GetSource2(input.screenUV).rgb;
+    lowRes += highRes - ApplyBloomThreshold(highRes);
+    return float4(lerp(highRes, lowRes, _BloomIntensity), 1.0);
+}
+
+// me11: 简单复制（ToneMapping=None 时用）
 float4 CopyPassFragment (Varyings input) : SV_TARGET {
     return GetSource(input.screenUV);
+}
+
+// me12: ACES Tone Mapping — 转到 ACES 色彩空间后压缩，电影感强
+float4 ToneMappingACESPassFragment (Varyings input) : SV_TARGET {
+    float4 color = GetSource(input.screenUV);
+    color.rgb = min(color.rgb, 60.0);
+    color.rgb = AcesTonemap(unity_to_ACES(color.rgb));
+    return color;
+}
+
+// me12: Neutral Tone Mapping — URP/HDRP 同款 S 形曲线，胶片感
+float4 ToneMappingNeutralPassFragment (Varyings input) : SV_TARGET {
+    float4 color = GetSource(input.screenUV);
+    color.rgb = min(color.rgb, 60.0);
+    color.rgb = NeutralTonemap(color.rgb);
+    return color;
+}
+
+// me12: Reinhard Tone Mapping — c/(c+1)，暗处几乎不变，亮处渐压向1
+float4 ToneMappingReinhardPassFragment (Varyings input) : SV_TARGET {
+    float4 color = GetSource(input.screenUV);
+    color.rgb = min(color.rgb, 60.0);
+    color.rgb /= color.rgb + 1.0;
+    return color;
 }
 
 #endif

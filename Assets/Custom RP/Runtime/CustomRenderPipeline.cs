@@ -7,23 +7,27 @@ public partial class CustomRenderPipeline : RenderPipeline
 {
     // 存储开关状态
     bool useDynamicBatching, useGPUInstancing;
-    bool useLightsPerObject; // me09: 每物体灯光索引开关
+    bool useLightsPerObject;
+    bool allowHDR; // me12
 
     ShadowSettings shadowSettings;
     PostFXSettings postFXSettings; // me11
 
     // 构造函数接收参数
-    public CustomRenderPipeline (
+    public CustomRenderPipeline(
+        bool allowHDR,                 // me12
         bool useDynamicBatching, bool useGPUInstancing, bool useSRPBatcher,
         bool useLightsPerObject,       // me09
         ShadowSettings shadowSettings,
         PostFXSettings postFXSettings  // me11
-    ) {
-        this.useDynamicBatching  = useDynamicBatching;
-        this.useGPUInstancing    = useGPUInstancing;
-        this.useLightsPerObject  = useLightsPerObject;
-        this.shadowSettings      = shadowSettings;
-        this.postFXSettings      = postFXSettings; // me11
+    )
+    {
+        this.allowHDR = allowHDR;  // me12
+        this.useDynamicBatching = useDynamicBatching;
+        this.useGPUInstancing = useGPUInstancing;
+        this.useLightsPerObject = useLightsPerObject;
+        this.shadowSettings = shadowSettings;
+        this.postFXSettings = postFXSettings; // me11
 
         GraphicsSettings.useScriptableRenderPipelineBatching = useSRPBatcher;
         GraphicsSettings.lightsUseLinearIntensity = true;
@@ -38,11 +42,14 @@ public partial class CustomRenderPipeline : RenderPipeline
     // 旧版接口保留（Unity 要求重写，但实际用下面的 List 版本）
     protected override void Render(ScriptableRenderContext context, Camera[] cameras) { }
 
-    protected override void Render (ScriptableRenderContext context, List<Camera> cameras) {
-        foreach (Camera camera in cameras) {
+    protected override void Render(ScriptableRenderContext context, List<Camera> cameras)
+    {
+        foreach (Camera camera in cameras)
+        {
             // 把开关传给 Renderer
             renderer.Render(
                 context, camera,
+                allowHDR,           // me12
                 useDynamicBatching, useGPUInstancing,
                 useLightsPerObject, // me09
                 shadowSettings,
@@ -51,6 +58,6 @@ public partial class CustomRenderPipeline : RenderPipeline
         }
     }
 
-    
+
     CameraRenderer renderer = new CameraRenderer();//创建一个CameraRenderer对象
 }

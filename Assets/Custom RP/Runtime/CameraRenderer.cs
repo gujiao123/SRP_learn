@@ -21,17 +21,17 @@ public partial class CameraRenderer
     //me 和 URP feature 一样 你自己的pass也要去后处理设定才行
     //原理就是 生成hash 用于匹配而已 然后执行对应pass
     // 定义 Tag ID
-    static ShaderTagId 
+    static ShaderTagId
         unlitShaderTagId = new ShaderTagId("SRPDefaultUnlit"), //必须获取 SRPDefaultUnlit 通道的着色器标记ID
         litShaderTagId = new ShaderTagId("CustomLit"); // 新增 
-    
+
     //me 缓冲区是unity内置的只需要提供名字就行
     CommandBuffer buffer = new CommandBuffer
     {
         name = bufferName
     };//G 初始化成员的语法，这里初始化了一个CommandBuffer对象，并且给它命名为"Render Camera"
-    
-    
+
+
     // 1. 实例化 Lighting 类
     Lighting lighting = new Lighting();
 
@@ -40,6 +40,9 @@ public partial class CameraRenderer
 
     // me11: 中间帧缓冲（后处理激活时先渲染到这里，再由 PostFXStack 处理后输出到屏幕）
     static int frameBufferId = Shader.PropertyToID("_CameraFrameBuffer");
+
+    // me12: 是否真正启用 HDR（管线允许 && 相机允许）
+    bool useHDR;
 
     void ExecuteBuffer()
     {
@@ -52,22 +55,26 @@ public partial class CameraRenderer
     /// <param name="context"></param>
     /// <param name="camera"></param>
     public void Render(ScriptableRenderContext context, Camera camera,
+        bool allowHDR,                 // me12
         bool useDynamicBatching, bool useGPUInstancing,
         bool useLightsPerObject,      // me09
         ShadowSettings shadowSettings,
         PostFXSettings postFXSettings  // me11
     )
     {
-        
+
         //设定当前上下文和摄像机
         this.context = context;
         this.camera = camera;
+        // me12: 两层都允许 HDR 才真正启用
+        useHDR = allowHDR && camera.allowHDR;
         PrepareBuffer();//每个摄像机渲染器都会调用的函数，用于准备CommandBuffer   设置对应Buffer名字
         PrepareForSceneWindow();//渲染所有编辑世界(scene)的物体 然后剔除
-        if (!Cull(shadowSettings.maxDistance)) { // 使用 Max Distance 剔除
+        if (!Cull(shadowSettings.maxDistance))
+        { // 使用 Max Distance 剔除
             return;
         }
-        
+
         //!!我们需要在渲染实际摄像机画面之前渲染阴影贴图
         //???不明白啊 ,到底 我们 屏幕上显示的是什么
         // 2. 在画物体之前，先设置灯光！
@@ -76,15 +83,15 @@ public partial class CameraRenderer
         ExecuteBuffer();//提交一下 才能生效
         //将光源信息传递给GPU，在其中也会完成阴影贴图的渲染
         lighting.Setup(context, cullingResults, shadowSettings, useLightsPerObject); // me09
-        // me11: 初始化后处理栈
-        postFXStack.Setup(context, camera, postFXSettings);
+        // me11: 初始化后处理栈，me12: 多传 useHDR
+        postFXStack.Setup(context, camera, postFXSettings, useHDR);
         buffer.EndSample(SampleName);
-        
-        
+
+
         //然后 把画布修改交给摄像机RT,
         //!!不能反过来,不然会导致 所有作画都在阴影上,而阴影贴图没有颜色通道
         Setup();
-        
+
         //注意是对shadertag 也就是filter来进行区别绘制
         // 传给 DrawVisibleGeometry
         DrawVisibleGeometry(useDynamicBatching, useGPUInstancing, useLightsPerObject); // me09
@@ -93,12 +100,13 @@ public partial class CameraRenderer
         // me11: Gizmos 拆分 — PreImageEffects 在后处理之前绘制
         DrawGizmosBeforeFX();
         // me11: 后处理激活时，将中间帧缓冲交给 PostFXStack 处理
-        if (postFXStack.IsActive) {
+        if (postFXStack.IsActive)
+        {
             postFXStack.Render(frameBufferId);
         }
         // me11: PostImageEffects 在后处理之后绘制（保持清晰）
         DrawGizmosAfterFX();
-        
+
         Cleanup(); // me11: 统一清理
 
         //准备好缓冲后提交
@@ -110,7 +118,7 @@ public partial class CameraRenderer
     /// </summary>
     void Setup()
     {
-        
+
         //!! 这个也会重新绑定RT 也就是说 这个会抢夺 目前GPU处理的 图像 
         context.SetupCameraProperties(camera);//把摄像机的属性传递给当前上下文 得到对应的MVP矩阵
         //me 这个是自己可在editor内选择
@@ -124,15 +132,19 @@ public partial class CameraRenderer
 
         // me11: 后处理激活时，必须渲染到中间 RT 而非直接输出到屏幕
         // 因为后处理需要读取完整画面才能处理
-        if (postFXStack.IsActive) {
+        if (postFXStack.IsActive)
+        {
             // me11: 强制清除颜色和深度（中间 RT 的初始内容是垃圾数据）
-            if (flags > CameraClearFlags.Color) {
+            if (flags > CameraClearFlags.Color)
+            {
                 flags = CameraClearFlags.Color;
             }
             // me11: 申请一张和屏幕等大的临时 RT 作为中间帧缓冲
             buffer.GetTemporaryRT(
                 frameBufferId, camera.pixelWidth, camera.pixelHeight,
-                32, FilterMode.Bilinear, RenderTextureFormat.Default
+                32, FilterMode.Bilinear,
+                // me12: HDR 用 16-bit float（不clamp），LDR 用 8-bit（clamp到0-1）
+                useHDR ? RenderTextureFormat.DefaultHDR : RenderTextureFormat.Default
             );
             // me11: 把渲染目标从屏幕切换到这张 RT
             buffer.SetRenderTarget(
@@ -153,34 +165,37 @@ public partial class CameraRenderer
             flags == CameraClearFlags.Color ?
                 camera.backgroundColor.linear : Color.clear
         );
-        
+
 
         // 这两个层级现在是 平级 的（显示在一起），而不是父子关系
         // 为了我们的层级不叠加就等上面的会自己结束标签
         buffer.BeginSample(SampleName);//用于debuger显示区别bufferName是采样点名称
         ExecuteBuffer();//命令缓冲区中的所有命令都已经被执行并清空。
-        
+
     }
 
     // me11: 统一清理（释放 RT + 灯光清理）
-    void Cleanup () {
+    void Cleanup()
+    {
         lighting.Cleanup();
-        if (postFXStack.IsActive) {
+        if (postFXStack.IsActive)
+        {
             buffer.ReleaseTemporaryRT(frameBufferId);
         }
     }
 
-    
-    
-    
+
+
+
     /// <summary>
     /// 绘制所有可见几何体，包括不透明和透明物体，并绘制天空盒。
     /// 该方法首先根据当前摄像机的设置来渲染不透明物体，然后修改排序设置以渲染透明物体。
     /// 最后调用Unity内置函数绘制天空盒。
     /// </summary>
-    void DrawVisibleGeometry (bool useDynamicBatching, bool useGPUInstancing, bool useLightsPerObject) {
-        
-        
+    void DrawVisibleGeometry(bool useDynamicBatching, bool useGPUInstancing, bool useLightsPerObject)
+    {
+
+
 
         //!第一阶段：渲染不透明物体 (Opaque)
         // 1. 根据相机初始化排序设置（获取相机位置、投影等）
@@ -191,7 +206,8 @@ public partial class CameraRenderer
         //第二章新增是否开始动态批处理或者是gpu实例化的选项在管线中
         var drawingSettings = new DrawingSettings(
             unlitShaderTagId, sortingSettings//unlitId和顺序画画
-        ) {
+        )
+        {
             // --- 核心应用点 ---
             enableDynamicBatching = useDynamicBatching,
             enableInstancing = useGPUInstancing,
@@ -200,7 +216,7 @@ public partial class CameraRenderer
             //me05 光照探针数据也要上报,不是这个光照探针又是什么鬼物体为什么要存储光照探针数据??存储的是什么
 
             //me06你要解释一下了这些
-            perObjectData = 
+            perObjectData =
                 PerObjectData.Lightmaps
                 | PerObjectData.ShadowMask
                 | PerObjectData.LightProbe
@@ -213,12 +229,12 @@ public partial class CameraRenderer
                     PerObjectData.LightData | PerObjectData.LightIndices :
                     PerObjectData.None)
         };
-        
+
         // 关键：添加第二个 Pass Name
         //第一个参数是槽位,第二是对应passtag  unlitShaderTagId就是从0槽位开始
         drawingSettings.SetShaderPassName(1, litShaderTagId);
-        
-        
+
+
         //设置绘制不透明物体
         var filteringSettings = new FilteringSettings(RenderQueueRange.opaque);//设置过滤对象
         //渲染CullingResults内的VisibleObjects
@@ -234,7 +250,7 @@ public partial class CameraRenderer
         drawingSettings.sortingSettings = sortingSettings;//修改成员   sortingSettings.criteria决定渲染顺序默认为None
         filteringSettings.renderQueueRange = RenderQueueRange.transparent;//绘制透明物体
         //todo 这个filteringSettings里面还是有很多门道的 后续问问ai 
-        context.DrawRenderers( cullingResults, ref drawingSettings, ref filteringSettings);
+        context.DrawRenderers(cullingResults, ref drawingSettings, ref filteringSettings);
     }
 
     void Submit()
