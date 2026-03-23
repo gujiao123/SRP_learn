@@ -50,6 +50,11 @@ float4x4 unity_prev_MatrixIM;   // 上一帧的逆模型矩阵
 float4x4 glstate_matrix_projection;// 投影矩阵
 float3 _WorldSpaceCameraPos;// 这是一个特殊向量，包含时间等信息，Core库依赖它
 
+// me11: 投影参数（x: 符号翻转标志, y: 近平面, z: 远平面, w: 1/远平面）
+// PostFX 用 x 来判断 UV 是否需要竖直翻转
+float4 _ProjectionParams;
+
+
 
 // -----------------
 #endif

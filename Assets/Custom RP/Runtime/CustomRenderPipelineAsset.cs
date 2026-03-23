@@ -10,6 +10,10 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     [SerializeField]
     ShadowSettings shadows = default;
 
+    // me11: 后处理设置
+    [SerializeField]
+    PostFXSettings postFXSettings = default;
+
     //用于动态批处理 过时技术,消耗大量cpu资源
     // 1. 定义序列化字段 (面板开关)
     [SerializeField]
@@ -22,9 +26,11 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
         return new CustomRenderPipeline(
             useDynamicBatching, useGPUInstancing, useSRPBatcher,
             useLightsPerObject, // me09
-            shadows
+            shadows,
+            postFXSettings      // me11
         );
     }
+
     
 }   
 

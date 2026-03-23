@@ -29,12 +29,18 @@ public partial class CameraRenderer
     CommandBuffer buffer = new CommandBuffer
     {
         name = bufferName
-    };//G 初始化成员的语法，这里初始化了一个CommandBuffer对象，并且给它命名为“Render Camera”
+    };//G 初始化成员的语法，这里初始化了一个CommandBuffer对象，并且给它命名为"Render Camera"
     
     
     // 1. 实例化 Lighting 类
     Lighting lighting = new Lighting();
-    
+
+    // me11: 后处理栈实例
+    PostFXStack postFXStack = new PostFXStack();
+
+    // me11: 中间帧缓冲（后处理激活时先渲染到这里，再由 PostFXStack 处理后输出到屏幕）
+    static int frameBufferId = Shader.PropertyToID("_CameraFrameBuffer");
+
     void ExecuteBuffer()
     {
         context.ExecuteCommandBuffer(buffer);//执行当前上下文中的指令队列
@@ -48,7 +54,8 @@ public partial class CameraRenderer
     public void Render(ScriptableRenderContext context, Camera camera,
         bool useDynamicBatching, bool useGPUInstancing,
         bool useLightsPerObject,      // me09
-        ShadowSettings shadowSettings
+        ShadowSettings shadowSettings,
+        PostFXSettings postFXSettings  // me11
     )
     {
         
@@ -69,6 +76,8 @@ public partial class CameraRenderer
         ExecuteBuffer();//提交一下 才能生效
         //将光源信息传递给GPU，在其中也会完成阴影贴图的渲染
         lighting.Setup(context, cullingResults, shadowSettings, useLightsPerObject); // me09
+        // me11: 初始化后处理栈
+        postFXStack.Setup(context, camera, postFXSettings);
         buffer.EndSample(SampleName);
         
         
@@ -76,18 +85,21 @@ public partial class CameraRenderer
         //!!不能反过来,不然会导致 所有作画都在阴影上,而阴影贴图没有颜色通道
         Setup();
         
-        // --- 新增：强制切回摄像机 RT ---
-        // 方法 A：再次调用 SetupCameraProperties
-        //?? 为了 解决 scene摄像机 画了阴影贴图 并不能回到大场景中 导致屏幕一片灰色 
-        //context.SetupCameraProperties(camera);
-        
         //注意是对shadertag 也就是filter来进行区别绘制
         // 传给 DrawVisibleGeometry
         DrawVisibleGeometry(useDynamicBatching, useGPUInstancing, useLightsPerObject); // me09
         DrawUnsupportedShaders();
-        DrawGizmos();
+
+        // me11: Gizmos 拆分 — PreImageEffects 在后处理之前绘制
+        DrawGizmosBeforeFX();
+        // me11: 后处理激活时，将中间帧缓冲交给 PostFXStack 处理
+        if (postFXStack.IsActive) {
+            postFXStack.Render(frameBufferId);
+        }
+        // me11: PostImageEffects 在后处理之后绘制（保持清晰）
+        DrawGizmosAfterFX();
         
-        lighting.Cleanup(); // 新增：在 Submit 之前清理
+        Cleanup(); // me11: 统一清理
 
         //准备好缓冲后提交
         Submit();
@@ -109,8 +121,26 @@ public partial class CameraRenderer
         Depth	3	只清深度，保留之前颜色 
         Nothing	4	啥也不清*/
         CameraClearFlags flags = camera.clearFlags;//选择摄像机的清除标志 枚举类
-        //Debug.Log("flags:" + (int)flags);
-        
+
+        // me11: 后处理激活时，必须渲染到中间 RT 而非直接输出到屏幕
+        // 因为后处理需要读取完整画面才能处理
+        if (postFXStack.IsActive) {
+            // me11: 强制清除颜色和深度（中间 RT 的初始内容是垃圾数据）
+            if (flags > CameraClearFlags.Color) {
+                flags = CameraClearFlags.Color;
+            }
+            // me11: 申请一张和屏幕等大的临时 RT 作为中间帧缓冲
+            buffer.GetTemporaryRT(
+                frameBufferId, camera.pixelWidth, camera.pixelHeight,
+                32, FilterMode.Bilinear, RenderTextureFormat.Default
+            );
+            // me11: 把渲染目标从屏幕切换到这张 RT
+            buffer.SetRenderTarget(
+                frameBufferId,
+                RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store
+            );
+        }
+
         //!注意了渲染的内容是不会自动清除的 需要我们手动清除
         // U Unity 内部又自动开了一个层级（名字也是 buffer.name），包裹住 Clear 
         //buffer.ClearRenderTarget 这个函数需要三个参数：
@@ -124,7 +154,6 @@ public partial class CameraRenderer
                 camera.backgroundColor.linear : Color.clear
         );
         
-        
 
         // 这两个层级现在是 平级 的（显示在一起），而不是父子关系
         // 为了我们的层级不叠加就等上面的会自己结束标签
@@ -133,7 +162,14 @@ public partial class CameraRenderer
         
     }
 
-    
+    // me11: 统一清理（释放 RT + 灯光清理）
+    void Cleanup () {
+        lighting.Cleanup();
+        if (postFXStack.IsActive) {
+            buffer.ReleaseTemporaryRT(frameBufferId);
+        }
+    }
+
     
     
     
@@ -145,7 +181,7 @@ public partial class CameraRenderer
     void DrawVisibleGeometry (bool useDynamicBatching, bool useGPUInstancing, bool useLightsPerObject) {
         
         
-        
+
         //!第一阶段：渲染不透明物体 (Opaque)
         // 1. 根据相机初始化排序设置（获取相机位置、投影等）
         //! 这个默认的sortingSettings.criteria  criteria（排序准则）是None 也就是随机绘制 
@@ -188,11 +224,11 @@ public partial class CameraRenderer
         //渲染CullingResults内的VisibleObjects
         context.DrawRenderers(cullingResults, ref drawingSettings, ref filteringSettings);
         //!第二阶段：绘制天空盒 (Skybox)
-        //添加“绘制天空盒”指令，DrawSkybox为ScriptableRenderContext下已有函数，这里就体现了为什么说Unity已经帮我们封装好了很多我们要用到的函数，SPR的画笔~
+        //添加"绘制天空盒"指令，DrawSkybox为ScriptableRenderContext下已有函数，这里就体现了为什么说Unity已经帮我们封装好了很多我们要用到的函数，SPR的画笔~
         context.DrawSkybox(camera);
         //?为什么放在这里画？
         //@性能考量：天空盒通常覆盖整个屏幕。如果先画天空盒再画不透明物体，会浪费大量像素处理不必要的背景。
-        //@逻辑关系：在不透明物体画完后，天空盒只会在没有物体遮挡的空白区域“填充”像素。
+        //@逻辑关系：在不透明物体画完后，天空盒只会在没有物体遮挡的空白区域"填充"像素。
         //!第三阶段：渲染透明物体 (Transparent)
         sortingSettings.criteria = SortingCriteria.CommonTransparent;//设置顺序为透明物体顺序从后往前
         drawingSettings.sortingSettings = sortingSettings;//修改成员   sortingSettings.criteria决定渲染顺序默认为None

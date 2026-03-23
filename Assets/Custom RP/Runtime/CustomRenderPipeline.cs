@@ -10,17 +10,20 @@ public partial class CustomRenderPipeline : RenderPipeline
     bool useLightsPerObject; // me09: 每物体灯光索引开关
 
     ShadowSettings shadowSettings;
+    PostFXSettings postFXSettings; // me11
 
     // 构造函数接收参数
     public CustomRenderPipeline (
         bool useDynamicBatching, bool useGPUInstancing, bool useSRPBatcher,
         bool useLightsPerObject,       // me09
-        ShadowSettings shadowSettings
+        ShadowSettings shadowSettings,
+        PostFXSettings postFXSettings  // me11
     ) {
         this.useDynamicBatching  = useDynamicBatching;
         this.useGPUInstancing    = useGPUInstancing;
         this.useLightsPerObject  = useLightsPerObject;
         this.shadowSettings      = shadowSettings;
+        this.postFXSettings      = postFXSettings; // me11
 
         GraphicsSettings.useScriptableRenderPipelineBatching = useSRPBatcher;
         GraphicsSettings.lightsUseLinearIntensity = true;
@@ -42,7 +45,8 @@ public partial class CustomRenderPipeline : RenderPipeline
                 context, camera,
                 useDynamicBatching, useGPUInstancing,
                 useLightsPerObject, // me09
-                shadowSettings
+                shadowSettings,
+                postFXSettings      // me11
             );
         }
     }
