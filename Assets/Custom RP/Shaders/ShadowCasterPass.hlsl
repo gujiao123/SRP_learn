@@ -20,6 +20,8 @@ struct Varyings {
     float2 baseUV : VAR_BASE_UV;
     UNITY_VERTEX_INPUT_INSTANCE_ID
 };
+// me10: 控制是否启用 Shadow Pancaking（C# 端通过 SetGlobalFloat 设置）
+bool _ShadowPancaking;
 
 Varyings ShadowCasterPassVertex (Attributes input) {
 
@@ -36,24 +38,27 @@ Varyings ShadowCasterPassVertex (Attributes input) {
     // 变换到裁剪空间 (这里用的是光源的 VP 矩阵，不是摄像机的)
     output.positionCS = TransformWorldToHClip(positionWS);
     
-    
     //!!这里的z就是 距离光源的距离 我们直接用它来做近平面裁剪
     // --- Shadow Pancaking (防止近平面裁剪) ---
     // 如果使用反向 Z 缓冲，Clamp 深度到近平面 
     //output.positionCS.w =1或0
     //UNITY_NEAR_CLIP_VALUE就是近平面距离 
     //就是防止 阴影摄像机中 一些物体 超过了近平面 我们直接压扁到近平面上
-    #if UNITY_REVERSED_Z
-        output.positionCS.z = min(
-            output.positionCS.z, 
-            output.positionCS.w * UNITY_NEAR_CLIP_VALUE
-        );
-    #else
-        output.positionCS.z = max(
-            output.positionCS.z, 
-            output.positionCS.w * UNITY_NEAR_CLIP_VALUE
-        );
-    #endif
+    // me10: 但是只在正交投影（方向光）时才启用！
+    // 透视投影（点/聚光灯）时关闭，否则灯后的投射体会被错误压扁
+    if (_ShadowPancaking) {
+        #if UNITY_REVERSED_Z
+            output.positionCS.z = min(
+                output.positionCS.z, 
+                output.positionCS.w * UNITY_NEAR_CLIP_VALUE
+            );
+        #else
+            output.positionCS.z = max(
+                output.positionCS.z, 
+                output.positionCS.w * UNITY_NEAR_CLIP_VALUE
+            );
+        #endif
+    }
     // ---------------------------------------
     
     // UV 变换：调用银行接口

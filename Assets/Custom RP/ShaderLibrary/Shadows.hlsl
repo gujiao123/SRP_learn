@@ -17,13 +17,27 @@
     #define DIRECTIONAL_FILTER_SETUP SampleShadow_ComputeSamples_Tent_7x7
 #endif
 
+// me10: 点/聚光灯 PCF 过滤宏
+#if defined(_OTHER_PCF3)
+    #define OTHER_FILTER_SAMPLES 4
+    #define OTHER_FILTER_SETUP SampleShadow_ComputeSamples_Tent_3x3
+#elif defined(_OTHER_PCF5)
+    #define OTHER_FILTER_SAMPLES 9
+    #define OTHER_FILTER_SETUP SampleShadow_ComputeSamples_Tent_5x5
+#elif defined(_OTHER_PCF7)
+    #define OTHER_FILTER_SAMPLES 16
+    #define OTHER_FILTER_SETUP SampleShadow_ComputeSamples_Tent_7x7
+#endif
+
 #define MAX_SHADOWED_DIRECTIONAL_LIGHT_COUNT 4
+#define MAX_SHADOWED_OTHER_LIGHT_COUNT 16
 #define MAX_CASCADE_COUNT 4
 
 /* --- 纹理与采样器 --- */
 
 // TEXTURE2D_SHADOW 明确该贴图只包含深度值（Depth）
 TEXTURE2D_SHADOW(_DirectionalShadowAtlas);
+TEXTURE2D_SHADOW(_OtherShadowAtlas);// 采样用的阴影贴图
 
 // SAMPLER_CMP 定义硬件比较采样器。这种采样器在采样时直接执行深度比较，
 // 返回 0 或 1，利用 GPU 原生指令加速 PCF 过滤。
@@ -39,8 +53,10 @@ CBUFFER_START(_CustomShadows)
     float4 _CascadeCullingSpheres[MAX_CASCADE_COUNT];
     float4 _CascadeData[MAX_CASCADE_COUNT];
     float4x4 _DirectionalShadowMatrices[MAX_SHADOWED_DIRECTIONAL_LIGHT_COUNT * MAX_CASCADE_COUNT];
+    float4x4 _OtherShadowMatrices[MAX_SHADOWED_OTHER_LIGHT_COUNT]; // 世界→tile空间 变换矩阵
+    float4 _OtherShadowTiles[MAX_SHADOWED_OTHER_LIGHT_COUNT]; // xy=tile偏移, z=scale, w=normalBias
     float4 _ShadowDistanceFade; // x: 1/maxDist, y: 1/fadeRange, z: cascadeFade
-    float4 _ShadowAtlasSize;    // x: 1/size, y: 1/size, z: size, w: size
+    float4 _ShadowAtlasSize;    // xy=方向光(size, 1/size), zw=其他光(size, 1/size)
 CBUFFER_END
 
 /* --- 数据结构 --- */
@@ -67,10 +83,15 @@ struct DirectionalShadowData {
     int shadowMaskChannel;
 };
 
-// me09: 点光源/聚光灯的阴影数据（本章只有 Shadow Mask，无实时阴影）
+// me10: 点光源/聚光灯的阴影数据（支持实时阴影采样）
 struct OtherShadowData {
     float strength;
+    int tileIndex;  // 在 Atlas 上的第几个格子
+    bool isPoint;  // 是否点光源
     int shadowMaskChannel;
+    float3 lightPositionWS;// 光源世界坐标
+    float3 lightDirectionWS;// 表面→光源方向（用于选cubemap面）
+    float3 spotDirectionWS; // 聚光灯方向（用于算到光平面距离）
 };
 
 /* --- 核心计算函数 --- */
@@ -126,8 +147,10 @@ ShadowData GetShadowData(Surface surfaceWS) {
     }
 
     // 3. 处理超出所有级联范围的情况
-    //i=4 就代表超出了0-3 所以 就为0 
-    if (i == _CascadeCount) {
+    // me10: 加 _CascadeCount > 0 的判断！
+    // 原因：没有方向光时 _CascadeCount=0， i初始就=0，一进入就触发 strength=0
+    // 导致所有点/聚光灯的阴影被错误杀掉！ 否则会报错
+    if (i == _CascadeCount && _CascadeCount > 0) {
         data.strength = 0.0;
     }
     // 4. Dither 混合逻辑：利用噪声随机跳转级联索引，实现单次采样模拟软过渡
@@ -246,21 +269,6 @@ float GetBakedShadow(ShadowMask mask, int channel, float strength) {
     return 1.0;
 }
 
-// me09: 点/聚光灯阴影衰减（放到 GetBakedShadow 后面，解决前向引用问题）
-float GetOtherShadowAttenuation (
-    OtherShadowData other, ShadowData global, Surface surfaceWS
-) {
-    #if !defined(_RECEIVE_SHADOWS)
-        return 1.0;
-    #endif
-    float shadow;
-    if (other.strength > 0.0) {
-        shadow = GetBakedShadow(global.shadowMask, other.shadowMaskChannel, other.strength);
-    } else {
-        shadow = 1.0;
-    }
-    return shadow;
-}
 
 float MixBakedAndRealtimeShadows(
     ShadowData global, float shadow, int shadowMaskChannel, float strength
@@ -287,6 +295,7 @@ float MixBakedAndRealtimeShadows(
 /**
  * \brief 计算最终方向光阴影衰减值 [0, 1]
  */
+ //me10这个是计算方向光的阴影衰减值
 float GetDirectionalShadowAttenuation(
      DirectionalShadowData directional, ShadowData global, Surface surfaceWS
 )
@@ -330,5 +339,93 @@ float GetDirectionalShadowAttenuation(
     return shadow;
 }
 
+
+// me10: 采样 Other Shadow Atlas（带边界裁剪）
+float SampleOtherShadowAtlas (float3 positionSTS, float3 bounds) {
+    positionSTS.xy = clamp(positionSTS.xy, bounds.xy, bounds.xy + bounds.z);
+    return SAMPLE_TEXTURE2D_SHADOW(
+        _OtherShadowAtlas, SHADOW_SAMPLER, positionSTS
+    );
+}
+
+// me10: PCF 过滤采样（使用 _ShadowAtlasSize.wwzz）
+float FilterOtherShadow (float3 positionSTS, float3 bounds) {
+    #if defined(OTHER_FILTER_SETUP)
+        real weights[OTHER_FILTER_SAMPLES];
+        real2 positions[OTHER_FILTER_SAMPLES];
+        float4 size = _ShadowAtlasSize.wwzz;
+        OTHER_FILTER_SETUP(size, positionSTS.xy, weights, positions);
+        float shadow = 0;
+        for (int i = 0; i < OTHER_FILTER_SAMPLES; i++) {
+            shadow += weights[i] * SampleOtherShadowAtlas(
+                float3(positions[i].xy, positionSTS.z), bounds
+            );
+        }
+        return shadow;
+    #else
+        return SampleOtherShadowAtlas(positionSTS, bounds);
+    #endif
+}
+
+// me10: 点光源的 6 个面法线（方向与 cubemap face 相反）
+static const float3 pointShadowPlanes[6] = {
+    float3(-1.0, 0.0, 0.0),
+    float3(1.0, 0.0, 0.0),
+    float3(0.0, -1.0, 0.0),
+    float3(0.0, 1.0, 0.0),
+    float3(0.0, 0.0, -1.0),
+    float3(0.0, 0.0, 1.0)
+};
+
+// me10: 计算点/聚光灯实时阴影
+float GetOtherShadow (
+    OtherShadowData other, ShadowData global, Surface surfaceWS
+) {
+    float tileIndex = other.tileIndex;
+    float3 lightPlane = other.spotDirectionWS;
+    // 点光源：根据方向选择 cubemap 面
+    if (other.isPoint) {
+        float faceOffset = CubeMapFaceID(-other.lightDirectionWS);
+        tileIndex += faceOffset;
+        lightPlane = pointShadowPlanes[faceOffset];
+    }
+    float4 tileData = _OtherShadowTiles[tileIndex];
+    float3 surfaceToLight = other.lightPositionWS - surfaceWS.position;
+    float distanceToLightPlane = dot(surfaceToLight, lightPlane);
+    // 法线偏移随距离缩放（透视投影 texel 大小随距离线性增长）
+    float3 normalBias = surfaceWS.interpolatedNormal *
+        (distanceToLightPlane * tileData.w);
+    float4 positionSTS = mul(
+        _OtherShadowMatrices[tileIndex],
+        float4(surfaceWS.position + normalBias, 1.0)
+    );
+    // 透视除法
+    return FilterOtherShadow(positionSTS.xyz / positionSTS.w, tileData.xyz);
+}
+
+// me10: 改写 GetOtherShadowAttenuation，支持实时 + 烘焙阴影混合（和方向光逻辑一致）
+//me10这个是计算点/聚光灯的阴影衰减值
+float GetOtherShadowAttenuation (
+    OtherShadowData other, ShadowData global, Surface surfaceWS
+) {
+    #if !defined(_RECEIVE_SHADOWS)
+        return 1.0;
+    #endif
+    float shadow;
+    // other.strength * global.strength 的符号判断（和方向光一样）:
+    // 正数 = 有实时阴影，需要采样
+    // 负数或零 = 超出距离或只有烘焙 → 只查 Shadow Mask
+    if (other.strength * global.strength <= 0.0) {
+        shadow = GetBakedShadow(
+            global.shadowMask, other.shadowMaskChannel, abs(other.strength)
+        );
+    } else {
+        shadow = GetOtherShadow(other, global, surfaceWS);
+        shadow = MixBakedAndRealtimeShadows(
+            global, shadow, other.shadowMaskChannel, other.strength
+        );
+    }
+    return shadow;
+}
 
 #endif

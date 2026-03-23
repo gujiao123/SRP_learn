@@ -5,11 +5,13 @@ using UnityEngine.Rendering;
 // me09: partial class，Editor 部分在 CustomRenderPipeline.Editor.cs 里
 public partial class CustomRenderPipeline : RenderPipeline
 {
+    // 存储开关状态
     bool useDynamicBatching, useGPUInstancing;
     bool useLightsPerObject; // me09: 每物体灯光索引开关
 
     ShadowSettings shadowSettings;
 
+    // 构造函数接收参数
     public CustomRenderPipeline (
         bool useDynamicBatching, bool useGPUInstancing, bool useSRPBatcher,
         bool useLightsPerObject,       // me09
@@ -35,6 +37,7 @@ public partial class CustomRenderPipeline : RenderPipeline
 
     protected override void Render (ScriptableRenderContext context, List<Camera> cameras) {
         foreach (Camera camera in cameras) {
+            // 把开关传给 Renderer
             renderer.Render(
                 context, camera,
                 useDynamicBatching, useGPUInstancing,
@@ -44,5 +47,6 @@ public partial class CustomRenderPipeline : RenderPipeline
         }
     }
 
-    CameraRenderer renderer = new CameraRenderer();
+    
+    CameraRenderer renderer = new CameraRenderer();//创建一个CameraRenderer对象
 }

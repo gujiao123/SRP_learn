@@ -24,6 +24,10 @@ MonoBehaviour:
       cascadeRatio3: 0.5
       cascadeFade: 0.1
       cascadeBlend: 1
+    other:
+      atlasSize: 1024
+      filter: 0
   useDynamicBatching: 0
   useGPUInstancing: 1
   useSRPBatcher: 1
+  useLightsPerObject: 1

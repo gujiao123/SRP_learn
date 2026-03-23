@@ -70,11 +70,16 @@ Light GetDirectionalLight (int index, Surface surfaceWS, ShadowData shadowData)
 
 // me09: --- 点光源 / 聚光灯 ---
 
-// 从 _OtherLightShadowData 构造 OtherShadowData
+// me10: 从 _OtherLightShadowData 构造 OtherShadowData（含 tileIndex、isPoint）
 OtherShadowData GetOtherShadowData (int lightIndex) {
     OtherShadowData data;
     data.strength = _OtherLightShadowData[lightIndex].x;
+    data.tileIndex = _OtherLightShadowData[lightIndex].y;
+    data.isPoint = _OtherLightShadowData[lightIndex].z == 1.0;
     data.shadowMaskChannel = _OtherLightShadowData[lightIndex].w;
+    data.lightPositionWS = 0.0;
+    data.lightDirectionWS = 0.0;
+    data.spotDirectionWS = 0.0;
     return data;
 }
 
@@ -97,13 +102,17 @@ Light GetOtherLight (int index, Surface surfaceWS, ShadowData shadowData) {
 
     // 聚光灯角度衰减：saturate(dot(灯方向, 光线方向) * a + b)²
     // 点光源的 a=0, b=1 → 始终=1（无角度衰减）
+    float3 spotDirection = _OtherLightDirections[index].xyz;
     float4 spotAngles = _OtherLightSpotAngles[index];
     float spotAttenuation = Square(
-        saturate(dot(_OtherLightDirections[index].xyz, light.direction) * spotAngles.x + spotAngles.y)
+        saturate(dot(spotDirection, light.direction) * spotAngles.x + spotAngles.y)
     );
 
-    // 烘焙阴影
+    // me10: 构造阴影数据，传入光源位置和方向
     OtherShadowData otherShadowData = GetOtherShadowData(index);
+    otherShadowData.lightPositionWS = _OtherLightPositions[index].xyz;
+    otherShadowData.lightDirectionWS = light.direction;
+    otherShadowData.spotDirectionWS = spotDirection;
     light.attenuation =
         GetOtherShadowAttenuation(otherShadowData, shadowData, surfaceWS) *
         spotAttenuation * rangeAttenuation / distanceSqr;

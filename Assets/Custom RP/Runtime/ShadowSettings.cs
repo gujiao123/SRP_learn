@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 
 //配置驱动
@@ -78,6 +78,17 @@ public class ShadowSettings {
         cascadeRatio3 = 0.5f,//最后自动占比 51-100的 层次 所以一共四个层次
         cascadeFade = 0.1f,
         cascadeBlend = Directional.CascadeBlendMode.Hard
+    };
 
+    // me10: 点/聚光灯阴影配置（没有级联，只有 Atlas 大小和过滤模式）
+    [System.Serializable]
+    public struct Other {
+        public TextureSize atlasSize;
+        public FilterMode filter;
+    }
+
+    public Other other = new Other {
+        atlasSize = TextureSize._1024,
+        filter = FilterMode.PCF2x2
     };
 }

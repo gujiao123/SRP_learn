@@ -105,6 +105,7 @@ Shader "Custom RP/Lit"{
             #pragma multi_compile_instancing
             //又编写三个不同的版本
             #pragma multi_compile _ _DIRECTIONAL_PCF3 _DIRECTIONAL_PCF5 _DIRECTIONAL_PCF7
+            #pragma multi_compile _ _OTHER_PCF3 _OTHER_PCF5 _OTHER_PCF7
             //告诉Unity启用_CLIPPING关键字时编译不同版本的Shader
             #pragma shader_feature _CLIPPING
             //定义是否接收阴影关键字
