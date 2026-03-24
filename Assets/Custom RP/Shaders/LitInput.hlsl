@@ -36,6 +36,7 @@ UNITY_INSTANCING_BUFFER_START(UnityPerMaterial)
     UNITY_DEFINE_INSTANCED_PROP(float,  _DetailSmoothness) // me08: 细节光滑度影响强度
     UNITY_DEFINE_INSTANCED_PROP(float,  _NormalScale)        // me08: 法线强度
     UNITY_DEFINE_INSTANCED_PROP(float,  _DetailNormalScale)  // me08: 细节法线强度
+    UNITY_DEFINE_INSTANCED_PROP(float, _ZWrite)
 UNITY_INSTANCING_BUFFER_END(UnityPerMaterial)
 
 // =============================================
@@ -151,4 +152,10 @@ float3 GetNormalTS(float2 baseUV, float2 detailUV = 0.0) {
     return normal;
 }
 
+// me14: 获取最终 Alpha（根据 ZWrite 决定）
+float GetFinalAlpha(float alpha) {
+    // ZWrite=1（不透明物体）→ alpha强制为1，避免半透明深度写入干扰叠层
+    // ZWrite=0（透明物体）→ 保留真实alpha
+    return INPUT_PROP(_ZWrite) ? 1.0 : alpha;
+}
 #endif

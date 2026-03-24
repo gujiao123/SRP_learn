@@ -15,6 +15,7 @@ float4x4 unity_WorldToObject;
 // 即使我们不用它，也必须占个位，否则内存对齐会错，导致闪烁
 float4 unity_LODFade; 
 float4 unity_WorldTransformParams;
+float4 unity_RenderingLayer;   // me14: 物体的渲染层掩码，.x 分量存 mask
 // me09: 每物体灯光数据（_LIGHTS_PER_OBJECT 模式需要）
 // unity_LightData.y = 影响此物体的灯光数量
 real4 unity_LightData;

@@ -89,7 +89,8 @@ Shader "Custom RP/Lit"{
             
             // --- 应用渲染状态 ---
             // 这些指令在 HLSL 代码块之外！它们是 ShaderLab 的指令
-            Blend [_SrcBlend] [_DstBlend]
+            //me14 必须加上 , One OneMinusSrcAlpha 不然半透明物体会把后面的物体挡住 这个,后面的是透明度混合
+            Blend [_SrcBlend] [_DstBlend], One OneMinusSrcAlpha
             ZWrite [_ZWrite]
             // ------------------
             

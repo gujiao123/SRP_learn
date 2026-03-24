@@ -15,7 +15,7 @@ struct Surface {
     float3 position;
     float depth;//表面深度 用于裁剪剔除球
     float dither;//扰动值
-
+    uint renderingLayerMask;   // me14: 物体渲染层掩码（位掩码）
 };
 
 #endif

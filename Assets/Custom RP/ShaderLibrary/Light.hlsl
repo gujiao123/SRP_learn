@@ -8,13 +8,13 @@
 CBUFFER_START(_CustomLight)
     int _DirectionalLightCount;
     float4 _DirectionalLightColors[MAX_DIRECTIONAL_LIGHT_COUNT];
-    float4 _DirectionalLightDirections[MAX_DIRECTIONAL_LIGHT_COUNT];
-    float4 _DirectionalLightShadowData[MAX_DIRECTIONAL_LIGHT_COUNT];
+    float4 _DirectionalLightDirectionsAndMasks[MAX_DIRECTIONAL_LIGHT_COUNT]; // me14: xyz=方向 w=渲染层掩码
+    float4 _DirectionalLightShadowData[MAX_DIRECTIONAL_LIGHT_COUNT];         // 方向光阴影数据
     // me09: Other Lights 数据（点光源 + 聚光灯共用）
     int _OtherLightCount;
     float4 _OtherLightColors[MAX_OTHER_LIGHT_COUNT];
     float4 _OtherLightPositions[MAX_OTHER_LIGHT_COUNT];   // xyz=世界坐标, w=1/range²
-    float4 _OtherLightDirections[MAX_OTHER_LIGHT_COUNT];  // 聚光灯方向（点光源不用）
+    float4 _OtherLightDirectionsAndMasks[MAX_OTHER_LIGHT_COUNT]; // me14: xyz=聚光灯方向 w=渲染层掩码
     float4 _OtherLightSpotAngles[MAX_OTHER_LIGHT_COUNT];  // x=a, y=b（角度衰减参数）
     float4 _OtherLightShadowData[MAX_OTHER_LIGHT_COUNT];  // 烘焙阴影数据
 CBUFFER_END
@@ -24,6 +24,7 @@ struct Light {
     float3 color;
     float3 direction;
     float attenuation;//等于1代表颜色底色,灯光没有衰减 没有阴影
+    uint renderingLayerMask;   // me14
 };
 
 // 获取当前有效灯光数量
@@ -61,7 +62,8 @@ Light GetDirectionalLight (int index, Surface surfaceWS, ShadowData shadowData)
     Light light;
     //float4的rgb和xyz完全等效
     light.color = _DirectionalLightColors[index].rgb;
-    light.direction = _DirectionalLightDirections[index].xyz;
+    light.direction = _DirectionalLightDirectionsAndMasks[index].xyz;
+    light.renderingLayerMask = asuint(_DirectionalLightDirectionsAndMasks[index].w);  // me14
     //构造光源阴影信息
     DirectionalShadowData dirShadowData = GetDirectionalShadowData(index, shadowData);
     light.attenuation = GetDirectionalShadowAttenuation(dirShadowData, shadowData, surfaceWS);
@@ -91,7 +93,6 @@ Light GetOtherLight (int index, Surface surfaceWS, ShadowData shadowData) {
     // 光线方向：从片元位置 → 光源位置，再归一化
     float3 ray = _OtherLightPositions[index].xyz - surfaceWS.position;
     light.direction = normalize(ray);
-
     // 距离平方衰减（平方反比定律：强度 ∝ 1/d²）
     // max 防止除以零（极近处过亮但不会崩）
     float distanceSqr = max(dot(ray, ray), 0.00001);
@@ -102,7 +103,8 @@ Light GetOtherLight (int index, Surface surfaceWS, ShadowData shadowData) {
 
     // 聚光灯角度衰减：saturate(dot(灯方向, 光线方向) * a + b)²
     // 点光源的 a=0, b=1 → 始终=1（无角度衰减）
-    float3 spotDirection = _OtherLightDirections[index].xyz;
+    float3 spotDirection = _OtherLightDirectionsAndMasks[index].xyz;
+    light.renderingLayerMask = asuint(_OtherLightDirectionsAndMasks[index].w);  // me14
     float4 spotAngles = _OtherLightSpotAngles[index];
     float spotAttenuation = Square(
         saturate(dot(spotDirection, light.direction) * spotAngles.x + spotAngles.y)

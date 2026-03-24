@@ -27,6 +27,8 @@ MonoBehaviour:
     other:
       atlasSize: 4096
       filter: 0
+  allowHDR: 1
+  colorLUTResolution: 32
   postFXSettings: {fileID: 11400000, guid: f67cd8e773aff6b4781b29f0983b2afe, type: 2}
   useDynamicBatching: 0
   useGPUInstancing: 1

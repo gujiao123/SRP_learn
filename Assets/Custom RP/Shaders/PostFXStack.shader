@@ -139,6 +139,7 @@ Shader "Hidden/Custom RP/Post FX Stack" {
         // Pass 12: Final（me13: 把 LUT 应用到原图并写屏幕）
         Pass {
             Name "Final"
+            Blend [_FinalSrcBlend] [_FinalDstBlend]   // me14 改这一行
             HLSLPROGRAM
                 #pragma target 3.5
                 #pragma vertex DefaultPassVertex

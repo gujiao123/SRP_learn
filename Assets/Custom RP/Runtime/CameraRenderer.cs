@@ -43,6 +43,8 @@ public partial class CameraRenderer
 
     // me12: 是否真正启用 HDR（管线允许 && 相机允许）
     bool useHDR;
+    // me14: 没有挂 CustomRenderPipelineCamera 组件时用这个默认值
+    static CameraSettings defaultCameraSettings = new CameraSettings();
 
     void ExecuteBuffer()
     {
@@ -67,6 +69,17 @@ public partial class CameraRenderer
         //设定当前上下文和摄像机
         this.context = context;
         this.camera = camera;
+
+        // me14: 读取相机上的自定义设置组件
+        //!!这个可以获取大量camera自定的设置组件哦
+        var crpCamera = camera.GetComponent<CustomRenderPipelineCamera>();
+        CameraSettings cameraSettings = crpCamera ? crpCamera.Settings : defaultCameraSettings;
+        // me14: 如果相机有自己的 PostFX 设置，覆盖管线传进来的全局设置
+        if (cameraSettings.overridePostFX)
+        {
+            postFXSettings = cameraSettings.postFXSettings;
+        }
+
         // me12: 两层都允许 HDR 才真正启用
         useHDR = allowHDR && camera.allowHDR;
         PrepareBuffer();//每个摄像机渲染器都会调用的函数，用于准备CommandBuffer   设置对应Buffer名字
@@ -83,9 +96,17 @@ public partial class CameraRenderer
         buffer.BeginSample(SampleName);
         ExecuteBuffer();//提交一下 才能生效
         //将光源信息传递给GPU，在其中也会完成阴影贴图的渲染
-        lighting.Setup(context, cullingResults, shadowSettings, useLightsPerObject); // me09
+        lighting.Setup(
+            context, cullingResults, shadowSettings, useLightsPerObject,
+            // me14: maskLights=true 时，传相机的 mask 来过滤灯光；否则传 -1（不过滤）
+            cameraSettings.maskLights ? cameraSettings.renderingLayerMask : -1
+        );
+
         // me11+13: 初始化后处理栈
-        postFXStack.Setup(context, camera, postFXSettings, useHDR, colorLUTResolution);
+        postFXStack.Setup(
+            context, camera, postFXSettings, useHDR, colorLUTResolution,
+            cameraSettings.finalBlendMode  // me14: 新增相机混合模式选择
+        );
         buffer.EndSample(SampleName);
 
 
@@ -95,7 +116,10 @@ public partial class CameraRenderer
 
         //注意是对shadertag 也就是filter来进行区别绘制
         // 传给 DrawVisibleGeometry
-        DrawVisibleGeometry(useDynamicBatching, useGPUInstancing, useLightsPerObject); // me09
+        DrawVisibleGeometry(
+            useDynamicBatching, useGPUInstancing, useLightsPerObject,
+            cameraSettings.renderingLayerMask  // me14: 相机的渲染层遮罩，过滤几何体
+        );
         DrawUnsupportedShaders();
 
         // me11: Gizmos 拆分 — PreImageEffects 在后处理之前绘制
@@ -121,6 +145,12 @@ public partial class CameraRenderer
     {
 
         //!! 这个也会重新绑定RT 也就是说 这个会抢夺 目前GPU处理的 图像 
+        //me11补充说明所以在这个之前就把shadowatlas给渲染完了再切换目标
+        //阴影先渲（用ShadowAtlas RT）
+        //    ↓
+        //SetupCameraProperties 把RT切回来
+        //    ↓
+        //画场景（用相机RT）
         context.SetupCameraProperties(camera);//把摄像机的属性传递给当前上下文 得到对应的MVP矩阵
         //me 这个是自己可在editor内选择
         //me做什么选择 只是选择一个枚举值罢了具体的逻辑还是你自己写 你就当成一个数字好了
@@ -193,30 +223,20 @@ public partial class CameraRenderer
     /// 该方法首先根据当前摄像机的设置来渲染不透明物体，然后修改排序设置以渲染透明物体。
     /// 最后调用Unity内置函数绘制天空盒。
     /// </summary>
-    void DrawVisibleGeometry(bool useDynamicBatching, bool useGPUInstancing, bool useLightsPerObject)
+    void DrawVisibleGeometry(
+        bool useDynamicBatching,
+        bool useGPUInstancing,
+        bool useLightsPerObject,
+        int renderingLayerMask  // me14: 相机渲染层遮罩，控制哪些物体被渲染
+    )
     {
-
-
-
-        //!第一阶段：渲染不透明物体 (Opaque)
-        // 1. 根据相机初始化排序设置（获取相机位置、投影等）
-        //! 这个默认的sortingSettings.criteria  criteria（排序准则）是None 也就是随机绘制 
         var sortingSettings = new SortingSettings(camera);
-        //me 当然你可以在这里sortingSettings.criteria=  SortingCriteria.CommonOpaque 强制从前往后
-        //决定摄像机支持的Shader Pass和绘制顺序等的配置
-        //第二章新增是否开始动态批处理或者是gpu实例化的选项在管线中
         var drawingSettings = new DrawingSettings(
-            unlitShaderTagId, sortingSettings//unlitId和顺序画画
+            unlitShaderTagId, sortingSettings
         )
         {
-            // --- 核心应用点 ---
             enableDynamicBatching = useDynamicBatching,
             enableInstancing = useGPUInstancing,
-            // -----------------
-            //me05 你不主动写unity就不得发送,这里是要static物体的烘焙好的光照贴图坐标数据
-            //me05 光照探针数据也要上报,不是这个光照探针又是什么鬼物体为什么要存储光照探针数据??存储的是什么
-
-            //me06你要解释一下了这些
             perObjectData =
                 PerObjectData.Lightmaps
                 | PerObjectData.ShadowMask
@@ -225,19 +245,17 @@ public partial class CameraRenderer
                 | PerObjectData.LightProbeProxyVolume
                 | PerObjectData.OcclusionProbeProxyVolume
                 | PerObjectData.ReflectionProbes
-                // me09: 每物体灯光索引（只在开启时才发送，否则 GPU 浪费带宽）
                 | (useLightsPerObject ?
                     PerObjectData.LightData | PerObjectData.LightIndices :
                     PerObjectData.None)
         };
-
-        // 关键：添加第二个 Pass Name
-        //第一个参数是槽位,第二是对应passtag  unlitShaderTagId就是从0槽位开始
         drawingSettings.SetShaderPassName(1, litShaderTagId);
 
-
-        //设置绘制不透明物体
-        var filteringSettings = new FilteringSettings(RenderQueueRange.opaque);//设置过滤对象
+        // me14: 把相机的 renderingLayerMask 传给 FilteringSettings，过滤几何体
+        var filteringSettings = new FilteringSettings(
+            RenderQueueRange.opaque,
+            renderingLayerMask: (uint)renderingLayerMask
+        );
         //渲染CullingResults内的VisibleObjects
         context.DrawRenderers(cullingResults, ref drawingSettings, ref filteringSettings);
         //!第二阶段：绘制天空盒 (Skybox)

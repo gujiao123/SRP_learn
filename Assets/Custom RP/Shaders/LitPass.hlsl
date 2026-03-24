@@ -166,6 +166,9 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     //表面扰动值 我去 这个不是类似毛毛贴图吗
     //目前配合TAA消除级联间阴影 抖动混合阴影专用
     surface.dither = InterleavedGradientNoise(input.positionCS.xy, 0);
+    
+    // me14: 从全局变量读取渲染层掩码
+    surface.renderingLayerMask = asuint(unity_RenderingLayer.x);  // me14: 原样读比特，不做数值转换
 
     // Clipping 逻辑
     #if defined(_CLIPPING)
@@ -192,9 +195,7 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     // 叠加自发光：自发光不受实时光照影响，直接加在最终颜色上
     // 如果没有设置 EmissionColor 或贴图，默认是黑色（0,0,0），等于没有影响
     color += GetEmission(input.baseUV);
-    return float4(color, surface.alpha);
-
-
+    return float4(color,  GetFinalAlpha(surface.alpha));
 }
 // 4. Include Guard 结束
 #endif

@@ -38,6 +38,12 @@ float3 GetLighting (Surface surface, BRDF brdf, Light light) {
     return IncomingLight(surface, light) * DirectBRDF(surface, brdf, light);
 }
 
+// me14: 判断物体和灯光的渲染层是否有交集（按位 AND）
+bool RenderingLayersOverlap(Surface surface, Light light) {
+    return (surface.renderingLayerMask & light.renderingLayerMask) != 0;
+}
+
+
 // 5. 主循环：方向光 + 点光源/聚光灯
 float3 GetLighting (Surface surfaceWS, BRDF brdf, GI gi) {
     ShadowData shadowData = GetShadowData(surfaceWS);
@@ -49,7 +55,10 @@ float3 GetLighting (Surface surfaceWS, BRDF brdf, GI gi) {
     // 方向光循环（不变）
     for (int i = 0; i < GetDirectionalLightCount(); i++) {
         Light light = GetDirectionalLight(i, surfaceWS, shadowData);
-        color += GetLighting(surfaceWS, brdf, light);
+        // 改成：
+        if (RenderingLayersOverlap(surfaceWS, light)) {
+            color += GetLighting(surfaceWS, brdf, light);
+        }
     }
 
     // me09: Other Lights 循环（支持每物体灯光索引优化）
@@ -61,13 +70,17 @@ float3 GetLighting (Surface surfaceWS, BRDF brdf, GI gi) {
             // uint 除法比 int 更快（GPU 优化）
             int lightIndex = unity_LightIndices[(uint)j / 4][(uint)j % 4];
             Light light = GetOtherLight(lightIndex, surfaceWS, shadowData);
-            color += GetLighting(surfaceWS, brdf, light);
+            if (RenderingLayersOverlap(surfaceWS, light)) {
+                color += GetLighting(surfaceWS, brdf, light);
+            }
         }
     #else
         // 标准模式：遍历所有可见 Other Lights（最多64盏）
         for (int j = 0; j < GetOtherLightCount(); j++) {
             Light light = GetOtherLight(j, surfaceWS, shadowData);
-            color += GetLighting(surfaceWS, brdf, light);
+            if (RenderingLayersOverlap(surfaceWS, light)) {
+                color += GetLighting(surfaceWS, brdf, light);
+            }
         }
     #endif
 

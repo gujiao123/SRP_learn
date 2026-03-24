@@ -426,6 +426,8 @@ public class Shadows
             cullingResults, light.visibleLightIndex,
             BatchCullingProjectionType.Perspective
         );
+        // me14: 开启渲染层掩码测试
+        shadowSettings.useRenderingLayerMaskTest = true;
         cullingResults.ComputeSpotShadowMatricesAndCullingPrimitives(
             light.visibleLightIndex,
             out Matrix4x4 viewMatrix,
@@ -468,6 +470,8 @@ public class Shadows
             cullingResults, light.visibleLightIndex,
             BatchCullingProjectionType.Perspective
         );
+        // me14: 开启渲染层掩码测试
+        shadowSettings.useRenderingLayerMaskTest = true;
         // 点光源 FOV 固定90°，texelSize = 2 / tileSize
         float texelSize = 2f / tileSize;
         float filterSize = texelSize * ((float)settings.other.filter + 1f);
@@ -571,7 +575,8 @@ public class Shadows
 
         // 2. 初始化阴影绘制设置（绑定对应的可见光索引）
         var shadowSettings = new ShadowDrawingSettings(cullingResults, light.visibleLightIndex);
-
+        // me14: 开启渲染层掩码测试
+        shadowSettings.useRenderingLayerMaskTest = true;
         // 3. 读取级联配置
         int cascadeCount = settings.directional.cascadeCount;
         // 计算该光源在 Atlas 中的起始偏移量（比如第0盏灯从0开始，第1盏灯从4开始）

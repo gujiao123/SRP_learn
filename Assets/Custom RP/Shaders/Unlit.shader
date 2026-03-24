@@ -36,7 +36,7 @@ Shader "Custom RP/Unlit"{
             
             // --- 应用渲染状态 ---
             // 这些指令在 HLSL 代码块之外！它们是 ShaderLab 的指令
-            Blend [_SrcBlend] [_DstBlend]
+            Blend [_SrcBlend] [_DstBlend], One OneMinusSrcAlpha
             ZWrite [_ZWrite]
             // ------------------
             

@@ -152,8 +152,8 @@ float4 BloomAddPassFragment (Varyings input) : SV_TARGET {
     else {
         lowRes = GetSource(input.screenUV).rgb;
     }
-    float3 highRes = GetSource2(input.screenUV).rgb;
-    return float4(lowRes * _BloomIntensity + highRes, 1.0);
+    float4 highRes = GetSource2(input.screenUV);
+    return float4(lowRes * _BloomIntensity + highRes.rgb, highRes.a);
 }
 
 // me11: Bloom 预过滤（应用阈值 + 半分辨率降采样）
@@ -222,9 +222,9 @@ float4 BloomScatterFinalPassFragment (Varyings input) : SV_TARGET {
     else {
         lowRes = GetSource(input.screenUV).rgb;
     }
-    float3 highRes = GetSource2(input.screenUV).rgb;
-    lowRes += highRes - ApplyBloomThreshold(highRes);
-    return float4(lerp(highRes, lowRes, _BloomIntensity), 1.0);
+    float4 highRes = GetSource2(input.screenUV);
+    lowRes += highRes.rgb - ApplyBloomThreshold(highRes.rgb);
+    return float4(lerp(highRes.rgb, lowRes, _BloomIntensity), highRes.a);
 }
 
 // me11: 简单复制

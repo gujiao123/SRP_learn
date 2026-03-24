@@ -39,29 +39,32 @@ public partial class PostFXStack
 
     // me11: Shader 属性 ID
     int
-        bloomBucibicUpsamplingId    = Shader.PropertyToID("_BloomBicubicUpsampling"),
-        bloomIntensityId            = Shader.PropertyToID("_BloomIntensity"),
-        bloomPrefilterId            = Shader.PropertyToID("_BloomPrefilter"),
-        bloomResultId               = Shader.PropertyToID("_BloomResult"),
-        bloomThresholdId            = Shader.PropertyToID("_BloomThreshold"),
-        fxSourceId                  = Shader.PropertyToID("_PostFXSource"),
-        fxSource2Id                 = Shader.PropertyToID("_PostFXSource2"),
+        bloomBucibicUpsamplingId = Shader.PropertyToID("_BloomBicubicUpsampling"),
+        bloomIntensityId = Shader.PropertyToID("_BloomIntensity"),
+        bloomPrefilterId = Shader.PropertyToID("_BloomPrefilter"),
+        bloomResultId = Shader.PropertyToID("_BloomResult"),
+        bloomThresholdId = Shader.PropertyToID("_BloomThreshold"),
+        fxSourceId = Shader.PropertyToID("_PostFXSource"),
+        fxSource2Id = Shader.PropertyToID("_PostFXSource2"),
         // me13: 颜色分级相关
-        colorAdjustmentsId          = Shader.PropertyToID("_ColorAdjustments"),
-        colorFilterId               = Shader.PropertyToID("_ColorFilter"),
-        whiteBalanceId              = Shader.PropertyToID("_WhiteBalance"),
-        splitToningShadowsId        = Shader.PropertyToID("_SplitToningShadows"),
-        splitToningHighlightsId     = Shader.PropertyToID("_SplitToningHighlights"),
-        channelMixerRedId           = Shader.PropertyToID("_ChannelMixerRed"),
-        channelMixerGreenId         = Shader.PropertyToID("_ChannelMixerGreen"),
-        channelMixerBlueId          = Shader.PropertyToID("_ChannelMixerBlue"),
-        smhShadowsId                = Shader.PropertyToID("_SMHShadows"),
-        smhMidtonesId               = Shader.PropertyToID("_SMHMidtones"),
-        smhHighlightsId             = Shader.PropertyToID("_SMHHighlights"),
-        smhRangeId                  = Shader.PropertyToID("_SMHRange"),
-        colorGradingLUTId           = Shader.PropertyToID("_ColorGradingLUT"),
+        colorAdjustmentsId = Shader.PropertyToID("_ColorAdjustments"),
+        colorFilterId = Shader.PropertyToID("_ColorFilter"),
+        whiteBalanceId = Shader.PropertyToID("_WhiteBalance"),
+        splitToningShadowsId = Shader.PropertyToID("_SplitToningShadows"),
+        splitToningHighlightsId = Shader.PropertyToID("_SplitToningHighlights"),
+        channelMixerRedId = Shader.PropertyToID("_ChannelMixerRed"),
+        channelMixerGreenId = Shader.PropertyToID("_ChannelMixerGreen"),
+        channelMixerBlueId = Shader.PropertyToID("_ChannelMixerBlue"),
+        smhShadowsId = Shader.PropertyToID("_SMHShadows"),
+        smhMidtonesId = Shader.PropertyToID("_SMHMidtones"),
+        smhHighlightsId = Shader.PropertyToID("_SMHHighlights"),
+        smhRangeId = Shader.PropertyToID("_SMHRange"),
+        colorGradingLUTId = Shader.PropertyToID("_ColorGradingLUT"),
         colorGradingLUTParametersId = Shader.PropertyToID("_ColorGradingLUTParameters"),
-        colorGradingLUTInLogId      = Shader.PropertyToID("_ColorGradingLUTInLogC");
+        colorGradingLUTInLogId = Shader.PropertyToID("_ColorGradingLUTInLogC"),
+        // me14: 新增混合模式属性
+        finalSrcBlendId = Shader.PropertyToID("_FinalSrcBlend"),
+        finalDstBlendId = Shader.PropertyToID("_FinalDstBlend");
 
     // me11: Bloom 金字塔纹理 ID（最多16级，每级需要2个RT：水平+竖直）
     const int maxBloomPyramidLevels = 16;
@@ -78,14 +81,16 @@ public partial class PostFXStack
 
     bool useHDR;            // me12
     int colorLUTResolution; // me13
-
+    CameraSettings.FinalBlendMode finalBlendMode;  //me14从inspector那里得到的数据
     public bool IsActive => settings != null;
 
     public void Setup(
         ScriptableRenderContext context, Camera camera,
-        PostFXSettings settings, bool useHDR, int colorLUTResolution
+        PostFXSettings settings, bool useHDR, int colorLUTResolution,
+        CameraSettings.FinalBlendMode finalBlendMode  //me14 ← 新增
     )
     {
+        this.finalBlendMode = finalBlendMode;  //me14 ← 新增
         this.useHDR = useHDR;
         this.colorLUTResolution = colorLUTResolution; // me13
         this.context = context;
@@ -118,6 +123,34 @@ public partial class PostFXStack
             MeshTopology.Triangles, 3
         );
     }
+
+    // me13: 修复拉伸的 DrawFinal（手动设置 Viewport）
+    static Rect fullViewRect = new Rect(0f, 0f, 1f, 1f);
+    //me13 修复了 DrawFinal 的拉伸问题 就是增加手动设置viewport ndc坐标映射到屏幕 来解决uv对应的问题
+    void DrawFinal(RenderTargetIdentifier from)
+    {
+        // me14: 把混合模式传给 Shader
+        buffer.SetGlobalFloat(finalSrcBlendId, (float)finalBlendMode.source);
+        buffer.SetGlobalFloat(finalDstBlendId, (float)finalBlendMode.destination);
+        buffer.SetGlobalTexture(fxSourceId, from);
+        buffer.SetRenderTarget(
+            BuiltinRenderTextureType.CameraTarget,
+            //me14 改成（两个条件都满足才能 DontCare）：  直接在一张图上混合就是了 load就是加载上一帧的画面
+            //传递这个 src 和dst的混合才有对应的像素来对吧 你不传入的哪里来呢？
+            //为了全屏+叠层能正常工作
+            finalBlendMode.destination == BlendMode.Zero && camera.rect == fullViewRect ?
+                RenderBufferLoadAction.DontCare :
+                RenderBufferLoadAction.Load,
+            RenderBufferStoreAction.Store
+        );
+        //me13关键就是要和一开始跟camera设置的viewport对应起来 直接传入 camera.pixelRect 这样ndc坐标就会映射到对应的屏幕区域
+        buffer.SetViewport(camera.pixelRect);  //me13新增的 ← 关键：恢复正确的视口！
+        buffer.DrawProcedural(
+            Matrix4x4.identity, settings.Material, (int)Pass.Final,
+            MeshTopology.Triangles, 3
+        );
+    }
+
 
     // me11+12: Bloom效果（me12: 返回 bool 告知 Render 是否有结果，输出到 bloomResultId）
     bool DoBloom(int sourceId)
@@ -303,17 +336,17 @@ public partial class PostFXStack
     void ConfigureChannelMixer()
     {
         ChannelMixerSettings channelMixer = settings.ChannelMixer;
-        buffer.SetGlobalVector(channelMixerRedId,   channelMixer.red);
+        buffer.SetGlobalVector(channelMixerRedId, channelMixer.red);
         buffer.SetGlobalVector(channelMixerGreenId, channelMixer.green);
-        buffer.SetGlobalVector(channelMixerBlueId,  channelMixer.blue);
+        buffer.SetGlobalVector(channelMixerBlueId, channelMixer.blue);
     }
 
     // me13: 阴影/中间调/高光——三色转线性空间，区域范围打包成一个 Vector4
     void ConfigureShadowsMidtonesHighlights()
     {
         ShadowsMidtonesHighlightsSettings smh = settings.ShadowsMidtonesHighlights;
-        buffer.SetGlobalColor(smhShadowsId,    smh.shadows.linear);
-        buffer.SetGlobalColor(smhMidtonesId,   smh.midtones.linear);
+        buffer.SetGlobalColor(smhShadowsId, smh.shadows.linear);
+        buffer.SetGlobalColor(smhMidtonesId, smh.midtones.linear);
         buffer.SetGlobalColor(smhHighlightsId, smh.highlights.linear);
         buffer.SetGlobalVector(smhRangeId, new Vector4(
             smh.shadowsStart, smh.shadowsEnd,
@@ -339,7 +372,7 @@ public partial class PostFXStack
 
         // me13: 刻度 LUT 纹理（宽2D贴图模拟 3D LUT）
         int lutHeight = colorLUTResolution;     // 32
-        int lutWidth  = lutHeight * lutHeight;  // 32×32 = 1024
+        int lutWidth = lutHeight * lutHeight;  // 32×32 = 1024
         buffer.GetTemporaryRT(
             colorGradingLUTId, lutWidth, lutHeight, 0,
             FilterMode.Bilinear, RenderTextureFormat.DefaultHDR
@@ -364,7 +397,8 @@ public partial class PostFXStack
             1f / lutWidth, 1f / lutHeight, lutHeight - 1f
         ));
         // Final Pass：把 LUT 应用到原图，写屏幕
-        Draw(sourceId, BuiltinRenderTextureType.CameraTarget, Pass.Final);
+        //Draw(sourceId, BuiltinRenderTextureType.CameraTarget, Pass.Final);
+        DrawFinal(sourceId);
         buffer.ReleaseTemporaryRT(colorGradingLUTId);
     }
 
