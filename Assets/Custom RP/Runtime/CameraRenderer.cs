@@ -35,16 +35,59 @@ public partial class CameraRenderer
     // 1. 实例化 Lighting 类
     Lighting lighting = new Lighting();
 
+    // me15: 全屏拷贝用的材质
+    Material material;
+    // me15: 占位贴图，当深度/颜色快照未就绪时防止 Shader 采样到垃圾数据
+    Texture2D missingTexture;
+
+    public CameraRenderer(Shader shader)
+    {
+        // me15: 用专属 Shader 创建材质（HideFlags 隐藏，避免出现在 Project 窗口）
+        material = CoreUtils.CreateEngineMaterial(shader);
+        // 创建 1x1 灰色占位贴图
+        missingTexture = new Texture2D(1, 1)
+        {
+            hideFlags = HideFlags.HideAndDontSave,
+            name = "Missing"
+        };
+        missingTexture.SetPixel(0, 0, Color.white * 0.5f);
+        missingTexture.Apply(true, true);
+    }
+
+    // me15: 释放材质和占位贴图（防止管线 Asset 修改时内存泄漏）
+    public void Dispose()
+    {
+        CoreUtils.Destroy(material);
+        CoreUtils.Destroy(missingTexture);
+    }
+
     // me11: 后处理栈实例
     PostFXStack postFXStack = new PostFXStack();
 
-    // me11: 中间帧缓冲（后处理激活时先渲染到这里，再由 PostFXStack 处理后输出到屏幕）
-    static int frameBufferId = Shader.PropertyToID("_CameraFrameBuffer");
+    // me15: 把原来的单一帧缓冲拆成两个 Attachment
+    //   颜色 Attachment → 只存 RGBA 颜色
+    //   深度 Attachment → 只存深度（这样才能单独拷贝）
+    static int
+        colorAttachmentId = Shader.PropertyToID("_CameraColorAttachment"),
+        depthAttachmentId = Shader.PropertyToID("_CameraDepthAttachment"),
+        depthTextureId = Shader.PropertyToID("_CameraDepthTexture"),
+        colorTextureId = Shader.PropertyToID("_CameraColorTexture"),
+        sourceTextureId = Shader.PropertyToID("_SourceTexture"),
+        // me15: DrawFinal 最终输出的混合模式属性
+        srcBlendId = Shader.PropertyToID("_CameraSrcBlend"),
+        dstBlendId = Shader.PropertyToID("_CameraDstBlend");
+
+    // me15: 是否需要拷贝深度/颜色（由 CameraBufferSettings 控制）
+    bool useDepthTexture, useColorTexture;
+    // me15: 是否使用中间缓冲（后处理激活 || 需要拷贝深度/颜色时都需要）
+    bool useIntermediateBuffer;
 
     // me12: 是否真正启用 HDR（管线允许 && 相机允许）
     bool useHDR;
     // me14: 没有挂 CustomRenderPipelineCamera 组件时用这个默认值
     static CameraSettings defaultCameraSettings = new CameraSettings();
+    // me15: 检测当前平台是否支持 CopyTexture（WebGL 2.0 不支持）
+    static bool copyTextureSupported = SystemInfo.copyTextureSupport > CopyTextureSupport.None;
 
     void ExecuteBuffer()
     {
@@ -57,12 +100,12 @@ public partial class CameraRenderer
     /// <param name="context"></param>
     /// <param name="camera"></param>
     public void Render(ScriptableRenderContext context, Camera camera,
-        bool allowHDR,                 // me12
+        CameraBufferSettings bufferSettings, // me15: 替代 bool allowHDR
         bool useDynamicBatching, bool useGPUInstancing,
-        bool useLightsPerObject,       // me09
+        bool useLightsPerObject,
         ShadowSettings shadowSettings,
-        PostFXSettings postFXSettings, // me11
-        int colorLUTResolution         // me13
+        PostFXSettings postFXSettings,
+        int colorLUTResolution
     )
     {
 
@@ -81,7 +124,20 @@ public partial class CameraRenderer
         }
 
         // me12: 两层都允许 HDR 才真正启用
-        useHDR = allowHDR && camera.allowHDR;
+        useHDR = bufferSettings.allowHDR && camera.allowHDR;
+
+        // me15: 根据管线配置 + 相机选筞决定是否拷贝
+        if (camera.cameraType == CameraType.Reflection)
+        {
+            useDepthTexture = bufferSettings.copyDepthReflection;
+            useColorTexture = bufferSettings.copyColorReflection;
+        }
+        else
+        {
+            useDepthTexture = bufferSettings.copyDepth && cameraSettings.copyDepth;
+            useColorTexture = bufferSettings.copyColor && cameraSettings.copyColor;
+        }
+
         PrepareBuffer();//每个摄像机渲染器都会调用的函数，用于准备CommandBuffer   设置对应Buffer名字
         PrepareForSceneWindow();//渲染所有编辑世界(scene)的物体 然后剔除
         if (!Cull(shadowSettings.maxDistance))
@@ -124,10 +180,16 @@ public partial class CameraRenderer
 
         // me11: Gizmos 拆分 — PreImageEffects 在后处理之前绘制
         DrawGizmosBeforeFX();
-        // me11: 后处理激活时，将中间帧缓冲交给 PostFXStack 处理
+        // me11: 后处理激活时，将颜色 Attachment 交给 PostFXStack 处理
         if (postFXStack.IsActive)
         {
-            postFXStack.Render(frameBufferId);
+            postFXStack.Render(colorAttachmentId);
+        }
+        else if (useIntermediateBuffer)
+        {
+            // me15: 无后处理但用了中间缓冲时，用 DrawFinal 支持 finalBlendMode
+            DrawFinal(cameraSettings.finalBlendMode);
+            ExecuteBuffer();
         }
         // me11: PostImageEffects 在后处理之后绘制（保持清晰）
         DrawGizmosAfterFX();
@@ -161,25 +223,32 @@ public partial class CameraRenderer
         Nothing	4	啥也不清*/
         CameraClearFlags flags = camera.clearFlags;//选择摄像机的清除标志 枚举类
 
-        // me11: 后处理激活时，必须渲染到中间 RT 而非直接输出到屏幕
-        // 因为后处理需要读取完整画面才能处理
-        if (postFXStack.IsActive)
+        // me15: 需要中间缓冲的条件：后处理激活 OR 需要深度/颜色拷贝
+        useIntermediateBuffer = postFXStack.IsActive || useDepthTexture || useColorTexture;
+
+        if (useIntermediateBuffer)
         {
-            // me11: 强制清除颜色和深度（中间 RT 的初始内容是垃圾数据）
+            // me15: 强制清除颜色和深度（中间 RT 的初始内容是垃圾数据）
             if (flags > CameraClearFlags.Color)
             {
                 flags = CameraClearFlags.Color;
             }
-            // me11: 申请一张和屏幕等大的临时 RT 作为中间帧缓冲
+            // me15: 颜色 Attachment（只存 RGBA，不包含深度）
             buffer.GetTemporaryRT(
-                frameBufferId, camera.pixelWidth, camera.pixelHeight,
-                32, FilterMode.Bilinear,
-                // me12: HDR 用 16-bit float（不clamp），LDR 用 8-bit（clamp到0-1）
+                colorAttachmentId, camera.pixelWidth, camera.pixelHeight,
+                0, FilterMode.Bilinear,
                 useHDR ? RenderTextureFormat.DefaultHDR : RenderTextureFormat.Default
             );
-            // me11: 把渲染目标从屏幕切换到这张 RT
+            // me15: 深度 Attachment（单独存深度，32bit 精度）
+            buffer.GetTemporaryRT(
+                depthAttachmentId, camera.pixelWidth, camera.pixelHeight,
+                32, FilterMode.Point, RenderTextureFormat.Depth
+            );
+            // me15: 同时绑定两个 Attachment，GPU 分别写颜色和深度
             buffer.SetRenderTarget(
-                frameBufferId,
+                colorAttachmentId,
+                RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store,
+                depthAttachmentId,
                 RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store
             );
         }
@@ -200,19 +269,108 @@ public partial class CameraRenderer
 
         // 这两个层级现在是 平级 的（显示在一起），而不是父子关系
         // 为了我们的层级不叠加就等上面的会自己结束标签
-        buffer.BeginSample(SampleName);//用于debuger显示区别bufferName是采样点名称
-        ExecuteBuffer();//命令缓冲区中的所有命令都已经被执行并清空。
+        buffer.BeginSample(SampleName);
+        // me15: 绑定占位贴图，防止 Shader 采样到未就绪的 RT
+        buffer.SetGlobalTexture(depthTextureId, missingTexture);
+        buffer.SetGlobalTexture(colorTextureId, missingTexture);
+        ExecuteBuffer();
 
     }
 
-    // me11: 统一清理（释放 RT + 灯光清理）
+    // me15: 统一清理（释放所有临时 RT + 灯光清理）
     void Cleanup()
     {
         lighting.Cleanup();
-        if (postFXStack.IsActive)
+        if (useIntermediateBuffer)
         {
-            buffer.ReleaseTemporaryRT(frameBufferId);
+            buffer.ReleaseTemporaryRT(colorAttachmentId);
+            buffer.ReleaseTemporaryRT(depthAttachmentId);
         }
+        if (useDepthTexture)
+        {
+            buffer.ReleaseTemporaryRT(depthTextureId);
+        }
+        if (useColorTexture)
+        {
+            buffer.ReleaseTemporaryRT(colorTextureId);
+        }
+    }
+
+    void Draw(RenderTargetIdentifier from, RenderTargetIdentifier to, bool isDepth = false)
+    {
+        buffer.SetGlobalTexture(sourceTextureId, from);
+        buffer.SetRenderTarget(
+            to,
+            RenderBufferLoadAction.DontCare,
+            RenderBufferStoreAction.Store
+        );
+        buffer.DrawProcedural(
+            Matrix4x4.identity,
+            material,
+            isDepth ? 1 : 0,
+            MeshTopology.Triangles, 3
+        );
+    }
+
+    // me15: 最终输出（支持 finalBlendMode，适配多相机/叠加渲染）
+    static readonly Rect fullViewRect = new Rect(0f, 0f, 1f, 1f);
+    void DrawFinal(CameraSettings.FinalBlendMode finalBlendMode)
+    {
+        buffer.SetGlobalFloat(srcBlendId, (float)finalBlendMode.source);
+        buffer.SetGlobalFloat(dstBlendId, (float)finalBlendMode.destination);
+        buffer.SetGlobalTexture(sourceTextureId, colorAttachmentId);
+        buffer.SetRenderTarget(
+            BuiltinRenderTextureType.CameraTarget,
+            finalBlendMode.destination == BlendMode.Zero && camera.rect == fullViewRect ?
+                RenderBufferLoadAction.DontCare : RenderBufferLoadAction.Load,
+            RenderBufferStoreAction.Store
+        );
+        buffer.SetViewport(camera.pixelRect);
+        buffer.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Triangles, 3);
+        buffer.SetGlobalFloat(srcBlendId, 1f);
+        buffer.SetGlobalFloat(dstBlendId, 0f);
+    }
+
+    void CopyAttachments()
+    {
+        if (useDepthTexture)
+        {
+            buffer.GetTemporaryRT(
+                depthTextureId, camera.pixelWidth, camera.pixelHeight,
+                32, FilterMode.Point, RenderTextureFormat.Depth
+            );
+            if (copyTextureSupported)
+                buffer.CopyTexture(depthAttachmentId, depthTextureId);
+            // ↑ GPU 内部直接把 depthAttachment 拷贝到 depthTexture
+            else
+                Draw(depthAttachmentId, depthTextureId, true);
+        }
+        if (useColorTexture)
+        {
+            buffer.GetTemporaryRT(
+                colorTextureId, camera.pixelWidth, camera.pixelHeight,
+                0, FilterMode.Bilinear,
+                useHDR ? RenderTextureFormat.DefaultHDR : RenderTextureFormat.Default
+            );
+            if (copyTextureSupported)
+                buffer.CopyTexture(colorAttachmentId, colorTextureId);
+            // ↑ GPU 内部直接把 depthAttachment 拷贝到 depthTexture
+            //me 意思就是 粒子特效需要一份参照物 作为读取 然后修改后写入 attachment 毕竟不能又读又写
+            else
+                Draw(colorAttachmentId, colorTextureId);
+        }
+        // 如果平台不支持 CopyTexture，用 Draw 局部改变了渲染目标，必须切回来
+        if (!copyTextureSupported && (useDepthTexture || useColorTexture))
+        {
+            buffer.SetRenderTarget(
+                colorAttachmentId,
+                RenderBufferLoadAction.Load, RenderBufferStoreAction.Store,
+                depthAttachmentId,
+                RenderBufferLoadAction.Load, RenderBufferStoreAction.Store
+            );
+        }
+        if (useDepthTexture || useColorTexture)
+            ExecuteBuffer();
     }
 
 
@@ -259,11 +417,13 @@ public partial class CameraRenderer
         //渲染CullingResults内的VisibleObjects
         context.DrawRenderers(cullingResults, ref drawingSettings, ref filteringSettings);
         //!第二阶段：绘制天空盒 (Skybox)
-        //添加"绘制天空盒"指令，DrawSkybox为ScriptableRenderContext下已有函数，这里就体现了为什么说Unity已经帮我们封装好了很多我们要用到的函数，SPR的画笔~
+        //添加"绘制天空盒"指令，DrawSkybox为ScriptableRenderContext下已有函数，这里就体现了为什么说Unity已经帮我们封装好了很多我们要用到的函数，        //!第二阶段：绘制天空盒 (Skybox)
         context.DrawSkybox(camera);
-        //?为什么放在这里画？
-        //@性能考量：天空盒通常覆盖整个屏幕。如果先画天空盒再画不透明物体，会浪费大量像素处理不必要的背景。
-        //@逻辑关系：在不透明物体画完后，天空盒只会在没有物体遮挡的空白区域"填充"像素。
+
+        // me15: 天空盒画完 → 不透明阶段结束 → 拷贝深度/颜色快照
+        // 必须在透明物体（粒子）之前，粒子 Shader 才能读到正确数据
+        CopyAttachments();
+
         //!第三阶段：渲染透明物体 (Transparent)
         sortingSettings.criteria = SortingCriteria.CommonTransparent;//设置顺序为透明物体顺序从后往前
         drawingSettings.sortingSettings = sortingSettings;//修改成员   sortingSettings.criteria决定渲染顺序默认为None

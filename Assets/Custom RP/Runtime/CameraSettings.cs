@@ -32,4 +32,9 @@ public class CameraSettings
     // false = 所有灯光正常生效（默认）
     // true  = 只接受与 renderingLayerMask 有交集的灯光
     public bool maskLights = false;
+
+    // me15: 每台相机独立控制是否拷贝深度/颜色（配合 CameraBufferSettings 的全局开关）
+    // 两者都 true 才真正拷贝
+    public bool copyDepth = true;
+    public bool copyColor = true;
 }

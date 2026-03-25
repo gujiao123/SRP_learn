@@ -10,9 +10,15 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     [SerializeField]
     ShadowSettings shadows = default;
 
-    // me12: 允许 HDR 渲染（项目级总开关，还需相机自身 allowHDR=true 才生效）
+    // me15: 相机缓冲配置（集中管理 HDR / 深度拷贝 / 颜色拷贝）
     [SerializeField]
-    bool allowHDR = true;
+    CameraBufferSettings cameraBuffer = new CameraBufferSettings {
+        allowHDR = true,
+        copyDepth = true,
+        copyDepthReflection = false,
+        copyColor = true,
+        copyColorReflection = false
+    };
 
     // me13: Color LUT 分辨率（16/32/64，越大精度越高但内存越大）
     // 32 是默认值，通常足够，banding明显时再用 64
@@ -30,17 +36,24 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
     //动态批处理(对应可见物体的gpu实例化) 和 GPU 实例化(对应可见物体的gpu实例化) 和 SRP Batcher(全局按钮)  
     bool useDynamicBatching = true, useGPUInstancing = true, useSRPBatcher = true,
          useLightsPerObject = true; // me09: 默认开启每物体灯光索引 渲染时候告诉摄像机 在range范围内就要去计算阴影烘焙的
+
+    // me15: 全屏拷贝用的专属 Shader（在 Inspector 里赋居 CameraRenderer.shader）
+    //me15为了硬编码路径就只能用这种方式加载咯 存放一个copy颜色和深度的shader
+    [SerializeField]
+    Shader cameraRendererShader = default;
+
     //重写创建实际RenderPipeline的函数
     // 2. 传给管线实例
     protected override RenderPipeline CreatePipeline()
     {
         return new CustomRenderPipeline(
-            allowHDR,               // me12
+            cameraBuffer,           // me15: 替代原来的 allowHDR
             useDynamicBatching, useGPUInstancing, useSRPBatcher,
             useLightsPerObject,     // me09
             shadows,
             postFXSettings,         // me11
-            (int)colorLUTResolution // me13: LUT分辨率转为 int（16/32/64）
+            (int)colorLUTResolution, // me13
+            cameraRendererShader     // me15: 全屏拷贝 Shader
         );
     }
 

@@ -236,6 +236,7 @@ public class Shadows
     // me10: 渲染阴影的主入口（统一设置级联数、距离衰减、Atlas 尺寸）
     public void Render()
     {
+        buffer.BeginSample(bufferName); // me15: 补上缺失的 BeginSample，与末尾 EndSample 配对
         if (shadowedDirectionalLightCount > 0)
         {
             RenderDirectionalShadows();

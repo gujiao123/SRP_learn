@@ -158,4 +158,21 @@ float GetFinalAlpha(float alpha) {
     // ZWrite=0（透明物体）→ 保留真实alpha
     return INPUT_PROP(_ZWrite) ? 1.0 : alpha;
 }
+
+// me15: InputConfig——把片元级别的配置集中管理
+// LitPassFragment 通过它获取 Fragment（含深度/屏幕UV）
+struct InputConfig {
+    Fragment fragment;  // 屏幕坐标、自身深度、缓冲区深度
+    float2 baseUV;
+    float2 detailUV;
+};
+
+InputConfig GetInputConfig(float4 positionCS_SS, float2 baseUV, float2 detailUV = 0.0) {
+    InputConfig c;
+    c.fragment = GetFragment(positionCS_SS);  // 构建 Fragment（含深度信息）
+    c.baseUV = baseUV;
+    c.detailUV = detailUV;
+    return c;
+}
+
 #endif

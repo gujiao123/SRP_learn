@@ -24,10 +24,9 @@ public partial class CustomRenderPipeline
         Lightmapping.SetDelegate(lightsDelegate);
     }
 
-    // Pipeline 销毁时必须清理，否则切回其他 RP 时 delegate 还挂着
-    protected override void Dispose(bool disposing)
+    // me15: Editor 专用清理（尋常就是重置烘焙 Delegate）
+    partial void DisposeForEditor()
     {
-        base.Dispose(disposing);
         Lightmapping.ResetDelegate();
     }
 

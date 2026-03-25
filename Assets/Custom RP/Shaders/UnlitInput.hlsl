@@ -53,4 +53,19 @@ float GetFinalAlpha(float alpha) {
     // ZWrite=0（透明物体）→ 保留真实alpha
     return UNITY_ACCESS_INSTANCED_PROP(UnityPerMaterial, _ZWrite) ? 1.0 : alpha;
 }
+
+// me15: InputConfig——统一管理片元配置（和 LitInput 接口一致）
+struct InputConfig {
+    Fragment fragment;
+    float2 baseUV;
+};
+
+InputConfig GetInputConfig(float4 positionCS_SS, float2 baseUV) {
+    InputConfig c;
+    c.fragment = GetFragment(positionCS_SS); // ← 这里构建 Fragment
+     //            算出 positionSS / screenUV / depth / bufferDepth
+    c.baseUV = baseUV;                        // ← UV 直接存进来
+    return c;
+}
+
 #endif

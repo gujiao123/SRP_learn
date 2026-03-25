@@ -88,6 +88,13 @@ public partial class CameraRenderer
     {
         if (Handles.ShouldRenderGizmos())
         {
+            // me15: 渲染到中间缓冲时，需要先把深度写入 Camera Target
+            // 这样 Gizmos 才能被场景几何体正确遮挡
+            if (useIntermediateBuffer)
+            {
+                Draw(depthAttachmentId, BuiltinRenderTextureType.CameraTarget, true);
+                ExecuteBuffer();
+            }
             context.DrawGizmos(camera, GizmoSubset.PreImageEffects);
         }
     }
@@ -97,6 +104,14 @@ public partial class CameraRenderer
     {
         if (Handles.ShouldRenderGizmos())
         {
+            // me15: 后处理活跃时，后处理建窳已经输出到 CameraTarget
+            // 但深度丢失了,需要再次把深度写到 CameraTarget才能正确遮挡后期 Gizmos
+            //me15这个时候cameratarget只有颜色缓冲 gizmos需要深度判断而且只能是用cameratarget这个图片
+            if (postFXStack.IsActive)
+            {
+                Draw(depthAttachmentId, BuiltinRenderTextureType.CameraTarget, true);
+                ExecuteBuffer();
+            }
             context.DrawGizmos(camera, GizmoSubset.PostImageEffects);
         }
     }

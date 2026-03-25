@@ -30,7 +30,7 @@ struct Attributes {
     float2 baseUV : TEXCOORD0;
 };
 struct Varyings {
-    float4 positionCS : SV_POSITION;
+    float4 positionCS_SS : SV_POSITION; // me15: 改名强调双重含义（顶点=裁剪空间，片元=屏幕空间）
     float3 positionWS : VAR_POSITION;
     float3 normalWS : VAR_NORMAL;
     #if defined(_NORMAL_MAP)
@@ -66,7 +66,7 @@ Varyings LitPassVertex (Attributes input) {
     // 步骤 A: 对象空间 -> 世界空间
     output.positionWS = TransformObjectToWorld(input.positionOS); // 赋值给 output
     // 步骤 B: 世界空间 -> 裁剪空间
-    output.positionCS = TransformWorldToHClip(output.positionWS );
+    output.positionCS_SS = TransformWorldToHClip(output.positionWS);
     
     // --- 法线变换 ---
     //使用 Core 库函数，自动处理缩放问题
@@ -100,7 +100,9 @@ Varyings LitPassVertex (Attributes input) {
 float4 LitPassFragment (Varyings input) : SV_TARGET {
     //me07：LOD Cross-Fade
     // unity_LODFade.x 由 Unity 自动填入：正数=淡出，负数=淡入
-    ClipLOD(input.positionCS.xy, unity_LODFade.x);
+    // me15: ClipLOD 现在接收 Fragment（GetFragment 从 positionCS_SS 构建）
+    InputConfig config = GetInputConfig(input.positionCS_SS, input.baseUV);
+    ClipLOD(config.fragment, unity_LODFade.x);
     // 1. 提取 ID：从 input 中拿到刚才传过来的 ID
     UNITY_SETUP_INSTANCE_ID(input);
     
@@ -165,7 +167,8 @@ float4 LitPassFragment (Varyings input) : SV_TARGET {
     
     //表面扰动值 我去 这个不是类似毛毛贴图吗
     //目前配合TAA消除级联间阴影 抖动混合阴影专用
-    surface.dither = InterleavedGradientNoise(input.positionCS.xy, 0);
+    // me15: 改用 Fragment.positionSS（语义更清晰）
+    surface.dither = InterleavedGradientNoise(config.fragment.positionSS, 0);
     
     // me14: 从全局变量读取渲染层掩码
     surface.renderingLayerMask = asuint(unity_RenderingLayer.x);  // me14: 原样读比特，不做数值转换

@@ -16,7 +16,7 @@ struct Attributes {
 
 // 输出结构 (只需要裁剪空间位置和 UV)
 struct Varyings {
-    float4 positionCS : SV_POSITION;
+    float4 positionCS_SS : SV_POSITION; // me15: 改名强调顶点/片元的双重含义
     float2 baseUV : VAR_BASE_UV;
     UNITY_VERTEX_INPUT_INSTANCE_ID
 };
@@ -36,7 +36,7 @@ Varyings ShadowCasterPassVertex (Attributes input) {
     // 变换到世界空间
     float3 positionWS = TransformObjectToWorld(input.positionOS);
     // 变换到裁剪空间 (这里用的是光源的 VP 矩阵，不是摄像机的)
-    output.positionCS = TransformWorldToHClip(positionWS);
+    output.positionCS_SS = TransformWorldToHClip(positionWS);
     
     //!!这里的z就是 距离光源的距离 我们直接用它来做近平面裁剪
     // --- Shadow Pancaking (防止近平面裁剪) ---
@@ -48,14 +48,14 @@ Varyings ShadowCasterPassVertex (Attributes input) {
     // 透视投影（点/聚光灯）时关闭，否则灯后的投射体会被错误压扁
     if (_ShadowPancaking) {
         #if UNITY_REVERSED_Z
-            output.positionCS.z = min(
-                output.positionCS.z, 
-                output.positionCS.w * UNITY_NEAR_CLIP_VALUE
+            output.positionCS_SS.z = min(
+                output.positionCS_SS.z,
+                output.positionCS_SS.w * UNITY_NEAR_CLIP_VALUE
             );
         #else
-            output.positionCS.z = max(
-                output.positionCS.z, 
-                output.positionCS.w * UNITY_NEAR_CLIP_VALUE
+            output.positionCS_SS.z = max(
+                output.positionCS_SS.z,
+                output.positionCS_SS.w * UNITY_NEAR_CLIP_VALUE
             );
         #endif
     }
@@ -70,7 +70,9 @@ Varyings ShadowCasterPassVertex (Attributes input) {
 // Fragment Shader：只负责 Alpha Clipping，不输出颜色
 void ShadowCasterPassFragment (Varyings input) {
    //me07 ShadowCasterPassFragment 最开始  
-    ClipLOD(input.positionCS.xy, unity_LODFade.x);
+    // me15: ClipLOD 改用 Fragment
+    Fragment fragment = GetFragment(input.positionCS_SS);
+    ClipLOD(fragment, unity_LODFade.x);
 
     //从input中提取实例的ID并将其存储在其他实例化宏所依赖的全局静态变量中
     UNITY_SETUP_INSTANCE_ID(input);
@@ -86,7 +88,7 @@ void ShadowCasterPassFragment (Varyings input) {
         clip(base.a - GetCutoff(input.baseUV));
     #elif defined(_SHADOWS_DITHER)
 
-        float dither = InterleavedGradientNoise(input.positionCS.xy, 0);
+        float dither = InterleavedGradientNoise(fragment.positionSS, 0);
         clip(base.a - dither);
     #endif
     // 注意：这个函数是 void，不返回任何颜色

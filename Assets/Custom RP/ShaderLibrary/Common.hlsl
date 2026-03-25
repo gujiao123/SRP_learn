@@ -51,6 +51,15 @@
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/SpaceTransforms.hlsl"
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Packing.hlsl" // me08: 法线解码函数库
 
+// me15: 公共采样器状态（Fragment.hlsl 里采样深度纹理和颜色纹理时用）
+// 声明在这里是因为多个 HLSL 文件都会用到，避免重复定义导致编译报错
+SAMPLER(sampler_linear_clamp);
+SAMPLER(sampler_point_clamp);
+
+// me15: 引入片元辅助工具（Fragment 结构体 + GetFragment + GetBufferColor）
+// 必须在其他依赖它的文件之前引入
+#include "Fragment.hlsl"
+
 //计算两点间的距离公式
 float DistanceSquared(float3 pA, float3 pB) {
     return dot(pA - pB, pA - pB);
@@ -68,9 +77,11 @@ float Square(float v) {
 // 思路：用抖动图案来"挖掉"一部分像素，制造半透明过渡效果
 // fade > 0 → 正在淡出（从1减到0）
 // fade < 0 → 正在淡入（从-1增到0）
-void ClipLOD(float2 positionCS, float fade) {
+// me15: ClipLOD 改为接收 Fragment（之前直接传 float2 positionCS）
+// 好处：Fragment 里已经包含 positionSS，语义更清晰
+void ClipLOD(Fragment fragment, float fade) {
     #if defined(LOD_FADE_CROSSFADE)
-        float dither = InterleavedGradientNoise(positionCS.xy, 0);
+        float dither = InterleavedGradientNoise(fragment.positionSS, 0);
         clip(fade + (fade < 0.0 ? dither : -dither));
     #endif
 }

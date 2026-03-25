@@ -17,17 +17,17 @@ MonoBehaviour:
     maxIterations: 5
     downscaleLimit: 2
     bicubicUpsampling: 0
-    threshold: 1.28
-    thresholdKnee: 0
+    threshold: 0.88
+    thresholdKnee: 0.212
     intensity: 0.75
     fadeFireflies: 1
     mode: 1
-    scatter: 0.479
+    scatter: 0.145
   toneMapping:
     mode: 1
   colorAdjustments:
     postExposure: 0
-    contrast: 0
+    contrast: 2.6
     colorFilter: {r: 1, g: 1, b: 1, a: 1}
     hueShift: 0
     saturation: 0

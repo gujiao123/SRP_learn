@@ -11,7 +11,7 @@
 // me11: 源纹理（当前帧画面）和第二源（用于 Bloom 合并）
 TEXTURE2D(_PostFXSource);
 TEXTURE2D(_PostFXSource2);
-SAMPLER(sampler_linear_clamp);
+// me15: sampler_linear_clamp 已移到 Common.hlsl 统一声明，这里不再重复定义
 
 // me11: 自动获取纹理 texel 大小 (Unity 自动填充 _TexelSize 后缀)
 // Unity 自动填充的！格式：(1/width, 1/height, width, height)
