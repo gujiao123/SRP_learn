@@ -12,12 +12,14 @@ public class CustomRenderPipelineAsset : RenderPipelineAsset
 
     // me15: 相机缓冲配置（集中管理 HDR / 深度拷贝 / 颜色拷贝）
     [SerializeField]
-    CameraBufferSettings cameraBuffer = new CameraBufferSettings {
+    CameraBufferSettings cameraBuffer = new CameraBufferSettings
+    {
         allowHDR = true,
         copyDepth = true,
         copyDepthReflection = false,
         copyColor = true,
-        copyColorReflection = false
+        copyColorReflection = false,
+        renderScale = 1f   // ← 加这一行
     };
 
     // me13: Color LUT 分辨率（16/32/64，越大精度越高但内存越大）

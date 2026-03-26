@@ -37,8 +37,11 @@ public class PostFXSettings : ScriptableObject
         [Min(1f)]
         public int downscaleLimit;      // 最小缩放到多少像素就停止 我靠 一般都是16
 
-        public bool bicubicUpsampling;  // 升采样时用双三次插值（更平滑）
+        public bool bicubicUpsampling;  // 升采样时用双三次插值（更平滑）   
 
+        // me16: 开启后 Bloom 的起始尺寸以相机原始分辨率为准，不受 renderScale 影响
+        // 好处：renderScale 动态变化时 Bloom 效果更稳定一致
+        public bool ignoreRenderScale;
         [Min(0f)]
         public float threshold;         // 亮度阈值（gamma空间，低于此值不参与Bloom）
 

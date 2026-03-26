@@ -1,4 +1,5 @@
 using System;
+using UnityEngine;
 using UnityEngine.Rendering;
 
 [Serializable]
@@ -37,4 +38,19 @@ public class CameraSettings
     // 两者都 true 才真正拷贝
     public bool copyDepth = true;
     public bool copyColor = true;
+    // me16: 每台相机独立的 renderScale 模式
+    // Inherit  = 直接用管线全局的 renderScale（默认）
+    // Multiply = 相机自己的 scale × 全局 scale（叠加）
+    // Override = 忽略全局，用相机自己的 scale
+    public enum RenderScaleMode { Inherit, Multiply, Override }
+    public RenderScaleMode renderScaleMode = RenderScaleMode.Inherit;
+    [Range(0.1f, 2f)]
+    public float renderScale = 1f;
+    // me16: 根据模式计算最终 renderScale
+    public float GetRenderScale(float scale)
+    {
+        return renderScaleMode == RenderScaleMode.Inherit ? scale :
+               renderScaleMode == RenderScaleMode.Override ? renderScale :
+               scale * renderScale;  // Multiply
+    }
 }

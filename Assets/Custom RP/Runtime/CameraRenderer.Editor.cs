@@ -124,6 +124,8 @@ public partial class CameraRenderer
         if (camera.cameraType == CameraType.SceneView)
         {
             ScriptableRenderContext.EmitWorldGeometryForSceneView(camera);
+            //??16这个就怎么避免了scene不被缩放呢
+            useScaledRendering = false; // me16: Scene 视图不做缩放，用于编辑时不受 renderScale 影响
         }
     }
 

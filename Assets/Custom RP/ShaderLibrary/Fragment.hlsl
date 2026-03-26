@@ -14,6 +14,8 @@
 TEXTURE2D(_CameraColorTexture);
 TEXTURE2D(_CameraDepthTexture);
 
+float4 _CameraBufferSize;  // me16: 存放实际 buffer 的 1/w, 1/h, w, h
+
 struct Fragment {
     float2 positionSS;   // 屏幕像素坐标，如 (640.5, 360.5)
     float2 screenUV;     // 屏幕 UV（positionSS / _ScreenParams.xy），范围 0~1
@@ -49,7 +51,9 @@ Fragment GetFragment(float4 positionCS_SS) {
     f.positionSS = positionCS_SS.xy;
 
     // 屏幕 UV（归一化到 0~1）
-    f.screenUV = f.positionSS / _ScreenParams.xy;
+    //f.screenUV = f.positionSS / _ScreenParams.xy;
+    f.screenUV = f.positionSS * _CameraBufferSize.xy;  // me16: 用 buffer 实际尺寸的倒数，避免 _ScreenParams 与缩放 buffer 不匹配
+
 
     // 该片元自身深度：
     //   透视相机：SV_POSITION.w = view-space 深度（GPU 自动提供）

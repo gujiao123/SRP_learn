@@ -146,5 +146,15 @@ Shader "Hidden/Custom RP/Post FX Stack" {
                 #pragma fragment FinalPassFragment
             ENDHLSL
         }
+        // Pass 13: Final Rescale（me16: LDR 插值缩放到屏幕，修复 HDR 插值 + 色带问题）
+        Pass {
+            Name "Final Rescale"
+            Blend [_FinalSrcBlend] [_FinalDstBlend]
+            HLSLPROGRAM
+                #pragma target 3.5
+                #pragma vertex DefaultPassVertex
+                #pragma fragment FinalPassFragmentRescale
+            ENDHLSL
+        }
     }
 }

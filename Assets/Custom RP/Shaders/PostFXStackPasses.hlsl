@@ -386,5 +386,16 @@ float4 FinalPassFragment(Varyings input) : SV_TARGET {
     color.rgb = ApplyColorGradingLUT(color.rgb);
     return color;
 }
+// me16: 最终缩放 Pass，在 LDR 阶段做插值，避免 HDR 插值硬边和 Color Grading 色带
+// 仅当 renderScale != 1 时才走这条路，此时 source 已经是 Tone Mapped 的 LDR 图
+bool _CopyBicubic;  // 是否启用双三次采样（更平滑，适合放大）
+float4 FinalPassFragmentRescale(Varyings input) : SV_TARGET {
+    if (_CopyBicubic) {
+        return GetSourceBicubic(input.screenUV);
+    }
+    else {
+        return GetSource(input.screenUV);
+    }
+}
 
 #endif

@@ -20,4 +20,13 @@ public struct CameraBufferSettings
     public bool copyColor;
     [Tooltip("反射相机是否拷贝颜色")]
     public bool copyColorReflection;
+    //me16 最终渲染目标的缩放 这个只在tonemapping之后 映射屏幕之前的最后一步
+    [Range(0.1f, 2f)]
+    public float renderScale;
+    // me16: 双三次缩放模式
+    // Off       = 始终用双线性（默认，性能最好）
+    // UpOnly    = 只在放大时用双三次（renderScale < 1 时）
+    // UpAndDown = 无论放大缩小都用双三次
+    public enum BicubicRescalingMode { Off, UpOnly, UpAndDown }
+    public BicubicRescalingMode bicubicRescaling;
 }

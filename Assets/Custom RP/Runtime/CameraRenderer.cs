@@ -68,6 +68,8 @@ public partial class CameraRenderer
     //   颜色 Attachment → 只存 RGBA 颜色
     //   深度 Attachment → 只存深度（这样才能单独拷贝）
     static int
+        //me16用来存储实际的buffer尺寸到shader
+        bufferSizeId = Shader.PropertyToID("_CameraBufferSize"),  // me16: 加在第一个
         colorAttachmentId = Shader.PropertyToID("_CameraColorAttachment"),
         depthAttachmentId = Shader.PropertyToID("_CameraDepthAttachment"),
         depthTextureId = Shader.PropertyToID("_CameraDepthTexture"),
@@ -83,7 +85,10 @@ public partial class CameraRenderer
     bool useIntermediateBuffer;
 
     // me12: 是否真正启用 HDR（管线允许 && 相机允许）
-    bool useHDR;
+    bool useHDR, useScaledRendering;
+    Vector2Int bufferSize;  // me16: 实际渲染 buffer 的尺寸（受 renderScale 影响）
+
+
     // me14: 没有挂 CustomRenderPipelineCamera 组件时用这个默认值
     static CameraSettings defaultCameraSettings = new CameraSettings();
     // me15: 检测当前平台是否支持 CopyTexture（WebGL 2.0 不支持）
@@ -138,18 +143,42 @@ public partial class CameraRenderer
             useColorTexture = bufferSettings.copyColor && cameraSettings.copyColor;
         }
 
+
+        // me16: 计算最终渲染缩放，±1% 内视为无缩放（避免浮点误差触发中间 buffer）
+        // me16: 用相机自身的 renderScaleMode 对全局 scale 进行修正（继承/乘/覆盖）
+        float renderScale = cameraSettings.GetRenderScale(bufferSettings.renderScale);
+        useScaledRendering = renderScale < 0.99f || renderScale > 1.01f;
+
         PrepareBuffer();//每个摄像机渲染器都会调用的函数，用于准备CommandBuffer   设置对应Buffer名字
         PrepareForSceneWindow();//渲染所有编辑世界(scene)的物体 然后剔除
         if (!Cull(shadowSettings.maxDistance))
         { // 使用 Max Distance 剔除
             return;
         }
-
+        if (useScaledRendering)
+        {
+            //me16相机设置的scale可能很大 导致buffer溢出
+            renderScale = Mathf.Clamp(renderScale, 0.1f, 2f); // me16: 防止相机 Multiply 后越界
+            // me16: 按缩放比例计算实际 buffer 尺寸，向下取整
+            bufferSize.x = (int)(camera.pixelWidth * renderScale);
+            bufferSize.y = (int)(camera.pixelHeight * renderScale);
+        }
+        else
+        {
+            bufferSize.x = camera.pixelWidth;
+            bufferSize.y = camera.pixelHeight;
+        }
         //!!我们需要在渲染实际摄像机画面之前渲染阴影贴图
         //???不明白啊 ,到底 我们 屏幕上显示的是什么
         // 2. 在画物体之前，先设置灯光！
         //规定好条目
         buffer.BeginSample(SampleName);
+        //me16render里计算完 bufferSize 后，立刻把它传给 GPU（紧接在那个 if/else 之后）：
+        // me16: 把实际 buffer 尺寸传给 Shader，避免用 _ScreenParams（跟相机像素走，不跟 buffer 走）
+        buffer.SetGlobalVector(bufferSizeId, new Vector4(
+            1f / bufferSize.x, 1f / bufferSize.y,
+            bufferSize.x, bufferSize.y
+        ));
         ExecuteBuffer();//提交一下 才能生效
         //将光源信息传递给GPU，在其中也会完成阴影贴图的渲染
         lighting.Setup(
@@ -161,7 +190,9 @@ public partial class CameraRenderer
         // me11+13: 初始化后处理栈
         postFXStack.Setup(
             context, camera, postFXSettings, useHDR, colorLUTResolution,
-            cameraSettings.finalBlendMode  // me14: 新增相机混合模式选择
+            cameraSettings.finalBlendMode,  // me14: 新增相机混合模式选择
+            bufferSize,  // me16: 新增
+            bufferSettings.bicubicRescaling  // me16: 新增
         );
         buffer.EndSample(SampleName);
 
@@ -224,7 +255,8 @@ public partial class CameraRenderer
         CameraClearFlags flags = camera.clearFlags;//选择摄像机的清除标志 枚举类
 
         // me15: 需要中间缓冲的条件：后处理激活 OR 需要深度/颜色拷贝
-        useIntermediateBuffer = postFXStack.IsActive || useDepthTexture || useColorTexture;
+        // me16: 缩放渲染也需要中间 buffer（才能在输出前执行缩放操作）
+        useIntermediateBuffer = useScaledRendering || postFXStack.IsActive || useDepthTexture || useColorTexture;
 
         if (useIntermediateBuffer)
         {
@@ -235,13 +267,13 @@ public partial class CameraRenderer
             }
             // me15: 颜色 Attachment（只存 RGBA，不包含深度）
             buffer.GetTemporaryRT(
-                colorAttachmentId, camera.pixelWidth, camera.pixelHeight,
+                colorAttachmentId, bufferSize.x, bufferSize.y,
                 0, FilterMode.Bilinear,
                 useHDR ? RenderTextureFormat.DefaultHDR : RenderTextureFormat.Default
             );
             // me15: 深度 Attachment（单独存深度，32bit 精度）
             buffer.GetTemporaryRT(
-                depthAttachmentId, camera.pixelWidth, camera.pixelHeight,
+                depthAttachmentId, bufferSize.x, bufferSize.y,
                 32, FilterMode.Point, RenderTextureFormat.Depth
             );
             // me15: 同时绑定两个 Attachment，GPU 分别写颜色和深度
@@ -336,7 +368,7 @@ public partial class CameraRenderer
         if (useDepthTexture)
         {
             buffer.GetTemporaryRT(
-                depthTextureId, camera.pixelWidth, camera.pixelHeight,
+                depthTextureId, bufferSize.x, bufferSize.y,
                 32, FilterMode.Point, RenderTextureFormat.Depth
             );
             if (copyTextureSupported)
@@ -348,7 +380,7 @@ public partial class CameraRenderer
         if (useColorTexture)
         {
             buffer.GetTemporaryRT(
-                colorTextureId, camera.pixelWidth, camera.pixelHeight,
+                colorTextureId, bufferSize.x, bufferSize.y,
                 0, FilterMode.Bilinear,
                 useHDR ? RenderTextureFormat.DefaultHDR : RenderTextureFormat.Default
             );

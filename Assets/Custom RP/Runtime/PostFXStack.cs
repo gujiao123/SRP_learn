@@ -35,6 +35,7 @@ public partial class PostFXStack
         ColorGradingNeutral,
         ColorGradingReinhard,
         Final,                // me13: 把 LUT 应用到原图并写屏幕
+        FinalRescale,  // me16: 在 LDR 阶段做插值缩放，避免 HDR 插值 + 色带问题
     }
 
     // me11: Shader 属性 ID
@@ -60,11 +61,14 @@ public partial class PostFXStack
         smhHighlightsId = Shader.PropertyToID("_SMHHighlights"),
         smhRangeId = Shader.PropertyToID("_SMHRange"),
         colorGradingLUTId = Shader.PropertyToID("_ColorGradingLUT"),
+        finalResultId = Shader.PropertyToID("_FinalResult"), // me16: 缩放前的 LDR 中间 RT
         colorGradingLUTParametersId = Shader.PropertyToID("_ColorGradingLUTParameters"),
         colorGradingLUTInLogId = Shader.PropertyToID("_ColorGradingLUTInLogC"),
         // me14: 新增混合模式属性
         finalSrcBlendId = Shader.PropertyToID("_FinalSrcBlend"),
-        finalDstBlendId = Shader.PropertyToID("_FinalDstBlend");
+        finalDstBlendId = Shader.PropertyToID("_FinalDstBlend"),
+        copyBicubicId = Shader.PropertyToID("_CopyBicubic"); // me16: 控制缩放采样质量
+
 
     // me11: Bloom 金字塔纹理 ID（最多16级，每级需要2个RT：水平+竖直）
     const int maxBloomPyramidLevels = 16;
@@ -84,12 +88,19 @@ public partial class PostFXStack
     CameraSettings.FinalBlendMode finalBlendMode;  //me14从inspector那里得到的数据
     public bool IsActive => settings != null;
 
+    Vector2Int bufferSize; // me16: 传入的实际渲染 buffer 尺寸
+    CameraBufferSettings.BicubicRescalingMode bicubicRescaling; // me16
+
     public void Setup(
         ScriptableRenderContext context, Camera camera,
         PostFXSettings settings, bool useHDR, int colorLUTResolution,
-        CameraSettings.FinalBlendMode finalBlendMode  //me14 ← 新增
+        CameraSettings.FinalBlendMode finalBlendMode,  //me14 ← 新增
+        Vector2Int bufferSize,  // me16: 新增
+        CameraBufferSettings.BicubicRescalingMode bicubicRescaling  // me16: 新增
     )
     {
+        this.bufferSize = bufferSize; // me16
+        this.bicubicRescaling = bicubicRescaling; // me16
         this.finalBlendMode = finalBlendMode;  //me14 ← 新增
         this.useHDR = useHDR;
         this.colorLUTResolution = colorLUTResolution; // me13
@@ -127,7 +138,7 @@ public partial class PostFXStack
     // me13: 修复拉伸的 DrawFinal（手动设置 Viewport）
     static Rect fullViewRect = new Rect(0f, 0f, 1f, 1f);
     //me13 修复了 DrawFinal 的拉伸问题 就是增加手动设置viewport ndc坐标映射到屏幕 来解决uv对应的问题
-    void DrawFinal(RenderTargetIdentifier from)
+    void DrawFinal(RenderTargetIdentifier from, Pass pass)  // me16: 支持不同的 final pass
     {
         // me14: 把混合模式传给 Shader
         buffer.SetGlobalFloat(finalSrcBlendId, (float)finalBlendMode.source);
@@ -146,9 +157,9 @@ public partial class PostFXStack
         //me13关键就是要和一开始跟camera设置的viewport对应起来 直接传入 camera.pixelRect 这样ndc坐标就会映射到对应的屏幕区域
         buffer.SetViewport(camera.pixelRect);  //me13新增的 ← 关键：恢复正确的视口！
         buffer.DrawProcedural(
-            Matrix4x4.identity, settings.Material, (int)Pass.Final,
-            MeshTopology.Triangles, 3
-        );
+     Matrix4x4.identity, settings.Material, (int)pass,  //me16 ← 改这里 支持不同pass
+     MeshTopology.Triangles, 3
+ );
     }
 
 
@@ -156,7 +167,20 @@ public partial class PostFXStack
     bool DoBloom(int sourceId)
     {
         PostFXSettings.BloomSettings bloom = settings.Bloom;
-        int width = camera.pixelWidth / 2, height = camera.pixelHeight / 2;
+        // int width = camera.pixelWidth / 2, height = camera.pixelHeight / 2;
+        // me16: ignoreRenderScale=true 时，Bloom 从相机原始分辨率开始，不受缩放影响
+        // 这样 renderScale 改变时 Bloom 效果不会跟着变大/变小
+        int width, height;
+        if (bloom.ignoreRenderScale)
+        {
+            width = camera.pixelWidth / 2;
+            height = camera.pixelHeight / 2;
+        }
+        else
+        {
+            width = bufferSize.x / 2;
+            height = bufferSize.y / 2;
+        }
 
         // me11: 如果 Bloom 被禁用或源图太小，直接返回 false
         // me12: BeginSample 移到这里之后，Bloom 禁用时不产生空的 Sample 块
@@ -289,7 +313,7 @@ public partial class PostFXStack
         buffer.SetGlobalFloat(bloomIntensityId, finalIntensity);
         buffer.SetGlobalTexture(fxSource2Id, sourceId);
         buffer.GetTemporaryRT(
-            bloomResultId, camera.pixelWidth, camera.pixelHeight,
+            bloomResultId, bufferSize.x, bufferSize.y, // me16: 改成用 bufferSize
             0, FilterMode.Bilinear, format
         );
         Draw(fromId, bloomResultId, finalPass);
@@ -398,7 +422,40 @@ public partial class PostFXStack
         ));
         // Final Pass：把 LUT 应用到原图，写屏幕
         //Draw(sourceId, BuiltinRenderTextureType.CameraTarget, Pass.Final);
-        DrawFinal(sourceId);
+        // me16: 判断是否需要额外的缩放步骤
+        // bufferSize 和 camera.pixelWidth 不一致 = 用了 renderScale，需要两步
+        if (bufferSize.x == camera.pixelWidth)
+        {
+            // renderScale == 1，直接一步写屏幕（原来的逻辑）
+            DrawFinal(sourceId, Pass.Final);
+        }
+        else
+        {
+            // me16: 两步走：
+            // 第一步：在 bufferSize 分辨率下做 ToneMap（LDR），存到临时 RT
+            // 第二步：把 LDR 结果插值缩放到屏幕分辨率
+            buffer.SetGlobalFloat(finalSrcBlendId, 1f);
+            buffer.SetGlobalFloat(finalDstBlendId, 0f);
+            buffer.GetTemporaryRT(
+                finalResultId, bufferSize.x, bufferSize.y,
+                0, FilterMode.Bilinear, RenderTextureFormat.Default  // 注意：Default = LDR！
+            );
+            Draw(sourceId, finalResultId, Pass.Final);  // HDR → LDR（Tone Map 在这里发生）
+            // me16: 根据设置决定是否用双三次采样
+            bool useBicubic = false;
+            if (bicubicRescaling == CameraBufferSettings.BicubicRescalingMode.UpAndDown)
+            {
+                useBicubic = true;
+            }
+            else if (bicubicRescaling == CameraBufferSettings.BicubicRescalingMode.UpOnly)
+            {
+                // 只有放大时用（renderScale < 1）
+                useBicubic = bufferSize.x < camera.pixelWidth;
+            }
+            buffer.SetGlobalFloat(copyBicubicId, useBicubic ? 1f : 0f);
+            DrawFinal(finalResultId, Pass.FinalRescale); // LDR → 屏幕（插值缩放在这里）
+            buffer.ReleaseTemporaryRT(finalResultId);
+        }
         buffer.ReleaseTemporaryRT(colorGradingLUTId);
     }
 

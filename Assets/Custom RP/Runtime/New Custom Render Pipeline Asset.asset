@@ -33,6 +33,8 @@ MonoBehaviour:
     copyDepthReflection: 0
     copyColor: 1
     copyColorReflection: 0
+    renderScale: 1
+    bicubicRescaling: 1
   colorLUTResolution: 32
   postFXSettings: {fileID: 11400000, guid: f67cd8e773aff6b4781b29f0983b2afe, type: 2}
   useDynamicBatching: 0
